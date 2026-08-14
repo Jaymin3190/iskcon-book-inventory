@@ -1,0 +1,4 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2
+a2wsgi>=1.10

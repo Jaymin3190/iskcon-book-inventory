@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>ISKCON Book Inventory &amp; Distribution</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="loginView">
+  <div class="login-card">
+    <h1>ISKCON Book Distribution</h1>
+    <p class="sub">Book Inventory &amp; Distribution Management System</p>
+    <input id="loginUser" placeholder="Username" autocomplete="username">
+    <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="loginBtn">Sign in</button>
+    <p id="loginError" class="error"></p>
+    <div class="demo">
+      <strong>Demo accounts</strong>
+      <div>superadmin / admin123</div>
+      <div>zoneadmin-west / zone123</div>
+      <div>distributor-west / dist123</div>
+      <div>store-mumbai / store123</div>
+    </div>
+  </div>
+</div>
+
+<div id="appView" hidden>
+  <header>
+    <div class="brand">ISKCON Book Distribution</div>
+    <div class="user-box">
+      <span id="userInfo"></span>
+      <button id="logoutBtn" class="ghost">Logout</button>
+    </div>
+  </header>
+  <nav id="tabs"></nav>
+  <main id="content"></main>
+</div>
+
+<div id="modalBackdrop" hidden>
+  <div id="modalBox"></div>
+</div>
+
+<div id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
