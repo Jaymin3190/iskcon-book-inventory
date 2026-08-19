@@ -102,3 +102,4 @@ tr:hover td { background: #fbf7ec; }
 .kbd { background: #eee4cf; border: 1px solid #d8c9a8; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 
 #scanBox input { font-family: Consolas, monospace; }
+tr.hl td { background: #fff3cd !important; }

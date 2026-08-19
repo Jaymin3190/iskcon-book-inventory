@@ -78,6 +78,44 @@ function toast(msg, type = '') {
   setTimeout(() => t.hidden = true, 3200);
 }
 
+const scanDb = new Map();
+
+function scanBoxHTML(placeholder = 'Scan barcode / ISBN, press Enter') {
+  return `<div class="cart-item" style="margin-bottom:10px">
+    <span style="font-size:12px;color:#8a5a1f;white-space:nowrap">Barcode scan</span>
+    <input id="scanStripInput" placeholder="${esc(placeholder)}" autocomplete="off" style="flex:1;font-family:Consolas,monospace">
+  </div>`;
+}
+
+function bindScan(onScan, onInput, keepFocus = true) {
+  const input = document.getElementById('scanStripInput');
+  if (!input) return;
+  input.focus();
+  input.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    const code = input.value.trim();
+    input.value = '';
+    if (!code) return;
+    try {
+      const b = await api('/api/books/lookup/' + encodeURIComponent(code));
+      scanDb.set('last', b);
+      onScan(b);
+      toast(b.title + ' matched', 'success');
+    } catch (err) { toast('No book for barcode ' + code, 'error'); }
+    if (keepFocus) input.focus();
+  });
+  if (onInput) input.addEventListener('input', () => onInput(input.value));
+  return input;
+}
+
+async function pageScanStrip(onScan, placeholder = 'Scan barcode / ISBN, press Enter') {
+  const holder = document.createElement('div');
+  holder.id = 'pageScanStrip';
+  holder.innerHTML = scanBoxHTML(placeholder);
+  document.getElementById('content').prepend(holder);
+  return bindScan(onScan, null);
+}
+
 async function dashboard() {
   const [stock, sales, tf] = await Promise.all([
     api('/api/reports/stock-summary'), api('/api/reports/sales'), api('/api/reports/transfers'),
@@ -121,10 +159,13 @@ async function books() {
         ${canEdit ? '<button class="primary" onclick="bookForm()">+ New book</button>' : ''}
       </div>
       <table>
-        <tr><th>Title</th><th>Barcode/ISBN</th><th>Author</th><th>Category</th><th>Price</th></tr>
-        ${rows.map(b => `<tr><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${esc(b.author)}</td><td>${esc(b.category)}</td><td>&#8377;${b.price}</td></tr>`).join('')}
+        <tr><th>Title</th><th>Barcode/ISBN</th><th>Language</th><th>Publication</th><th>Price</th></tr>
+        ${rows.map(b => `<tr ${b.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${esc(b.language || '')}</td><td>${esc(b.publication || '')}</td><td>&#8377;${b.price}</td></tr>`).join('')}
       </table>
     </div>`;
+  if (['super_admin', 'zone_admin', 'distributor', 'temple'].includes(state.user.role)) {
+    pageScanStrip(() => refreshCurrent(), 'Scan a book barcode to highlight it in the list');
+  }
 }
 
 async function bookForm() {
@@ -132,11 +173,9 @@ async function bookForm() {
     <div class="form-grid">
       <div class="form-row"><label>Title *</label><input id="bkTitle"></div>
       <div class="form-row"><label>Barcode/ISBN *</label><input id="bkBarcode" placeholder="e.g. 9780892131343"></div>
-      <div class="form-row"><label>Author</label><input id="bkAuthor"></div>
       <div class="form-row"><label>Language</label><input id="bkLang"></div>
-      <div class="form-row"><label>Category</label><input id="bkCat"></div>
+      <div class="form-row"><label>Publication</label><input id="bkPub" placeholder="e.g. Bhaktivedanta Book Trust (BBT)"></div>
       <div class="form-row"><label>Price (&#8377;)</label><input id="bkPrice" type="number" value="0"></div>
-      <div class="form-row"><label>Publisher</label><input id="bkPub"></div>
     </div>
     <button class="primary" onclick="bookCreate()">Save</button>`);
 }
@@ -145,9 +184,9 @@ async function bookCreate() {
   try {
     await api('/api/books', { method: 'POST', body: {
       title: document.getElementById('bkTitle').value, barcode: document.getElementById('bkBarcode').value.trim(),
-      isbn: document.getElementById('bkBarcode').value.trim(), author: document.getElementById('bkAuthor').value,
-      language: document.getElementById('bkLang').value, category: document.getElementById('bkCat').value,
-      price: Number(document.getElementById('bkPrice').value) || 0, publisher: document.getElementById('bkPub').value,
+      isbn: document.getElementById('bkBarcode').value.trim(), language: document.getElementById('bkLang').value,
+      publication: document.getElementById('bkPub').value,
+      price: Number(document.getElementById('bkPrice').value) || 0,
     }});
     closeModal(); toast('Book added', 'success'); refreshCurrent();
   } catch (e) { toast(e.message, 'error'); }
@@ -168,10 +207,11 @@ async function stock() {
         <button class="action" onclick="showLedger()">Stock ledger</button>
       </div>
       <table>
-        <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Category</th><th>Qty on hand</th><th>Price</th><th>Value</th></tr>
-        ${rows.map(r => `<tr><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.category)}</td><td>${r.qty}</td><td>&#8377;${r.price}</td><td>&#8377;${(r.qty * r.price).toFixed(2)}</td></tr>`).join('')}
+        <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th></tr>
+        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td>${r.qty}</td><td>&#8377;${r.price}</td><td>&#8377;${(r.qty * r.price).toFixed(2)}</td></tr>`).join('')}
       </table>
     </div>`;
+  pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row');
 }
 
 async function showLedger() {
@@ -196,10 +236,16 @@ async function scCreate() {
   const rows = await api('/api/stock?location_id=' + loc);
   state.scCountId = res.count_id;
   openModal(`<h3>Stock count #${res.count_id} — enter counted quantities</h3>
+    ${scanBoxHTML('Scan a barcode to jump to that book row')}
     <table id="scTable"><tr><th>Title</th><th>System qty</th><th>Counted</th></tr>
-      ${rows.map(r => `<tr><td>${esc(r.title)}</td><td>${r.qty}</td><td><input type="number" min="0" value="${r.qty}" data-book="${r.book_id}"></td></tr>`).join('')}
+      ${rows.map(r => `<tr data-book="${r.book_id}" data-barcode="${esc(r.barcode)}"><td>${esc(r.title)}</td><td>${r.qty}</td><td><input type="number" min="0" value="${r.qty}" data-book="${r.book_id}"></td></tr>`).join('')}
     </table>
     <br><button class="primary" onclick="scComplete()">Complete count</button>`);
+  bindScan(b => {
+    const row = document.querySelector(`#scTable tr[data-barcode="${b.barcode}"]`);
+    if (row) { row.scrollIntoView({ block: 'center' }); row.style.background = '#fff3cd'; row.querySelector('input').focus(); }
+    else toast('No count row for that book', 'error');
+  });
 }
 
 async function scComplete() {
@@ -267,10 +313,18 @@ async function transferForm() {
       <div class="form-row"><label>To location</label><select id="tfTo">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
     </div>
     <div class="form-row"><label>Note</label><input id="tfNote"></div>
+    ${scanBoxHTML('Scan barcode to add book to transfer')}
     <div id="trItems"></div>
     <button class="action" onclick="trAddRow()">+ Add item</button>
     <br><br><button class="primary" onclick="trSubmit()">Submit request</button>`);
   trRenderRows();
+  bindScan(b => {
+    trItems = trItems.filter(i => i.book_id);
+    const ex = trItems.find(i => i.book_id === b.id);
+    if (ex) ex.qty++;
+    else trItems.push({ book_id: b.id, qty: 1 });
+    trRenderRows();
+  });
 }
 
 function trRenderRows() {
@@ -337,10 +391,18 @@ async function returnForm() {
   openModal(`<h3>Record return</h3>
     <div class="form-row"><label>Location</label><select id="rtLoc">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
     <div class="form-row"><label>Reason</label><input id="rtReason"></div>
+    ${scanBoxHTML('Scan barcode to add book to return')}
     <div id="rtItems"></div>
     <button class="action" onclick="rtAddRow()">+ Add item</button>
     <br><br><button class="primary" onclick="rtSubmit()">Record return</button>`);
   rtRenderRows();
+  bindScan(b => {
+    rtItems = rtItems.filter(i => i.book_id);
+    const ex = rtItems.find(i => i.book_id === b.id);
+    if (ex) ex.qty++;
+    else rtItems.push({ book_id: b.id, qty: 1 });
+    rtRenderRows();
+  });
 }
 
 function rtRenderRows() {
@@ -393,6 +455,7 @@ async function damagedForm() {
   state.books = books;
   openModal(`<h3>Write off damaged stock</h3>
     <div class="form-row"><label>Location</label><select id="dmLoc">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
+    ${scanBoxHTML('Scan barcode to select book')}
     <div class="form-row"><label>Book</label>
       <select id="dmBook"><option value="">Select book</option>
         ${books.map(b => `<option value="${b.id}">${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}
@@ -410,6 +473,12 @@ async function damagedForm() {
     </div>
     <div class="form-row"><label>Note</label><input id="dmNote"></div>
     <button class="primary" onclick="dmSubmit()">Write off</button>`);
+  bindScan(b => {
+    const sel = document.getElementById('dmBook');
+    const opt = [...sel.options].find(o => String(o.value) === String(b.id));
+    if (opt) { sel.value = opt.value; }
+    else toast('Book not in list', 'error');
+  });
 }
 
 async function dmSubmit() {
