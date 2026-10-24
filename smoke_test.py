@@ -85,7 +85,7 @@ check("zones start at zero", all(s["qty"] == 0 for s in zone_stock))
 
 # --- transfer: zone leader self-service from temple ---
 code, tr = call("POST", "/api/stock/transfers", token=zone_t, body={
-    "from_location_id": 1, "to_location_id": 2, "note": "restock temple zone",
+    "from_location_id": 1, "to_location_id": 2, "note": None,
     "items": [{"book_id": 1, "qty": 5}, {"book_id": 5, "qty": 10}, {"book_id": 7, "qty": 4}],
 })
 check("zone leader requests transfer", code == 200 and tr["status"] == "requested", tr)
@@ -114,7 +114,8 @@ check("zone stock increased after receive", qty(zs, 1, 2) == 5 and qty(zs, 5, 2)
 
 # --- POS billing at temple ---
 code, inv = call("POST", "/api/pos/invoices", token=temple_t, body={
-    "customer_name": "Devotee Ram", "payment_mode": "cash",
+    "location_id": None, "customer_name": None, "customer_phone": None,
+    "customer_email": None, "payment_ref": None, "payment_mode": "cash",
     "items": [{"barcode": "9780892132517", "qty": 2}],
 })
 check("temple POS invoice (2 x 450)", code == 200 and inv["total"] == 900.0, inv)
@@ -155,7 +156,7 @@ check("count complete with variances", code == 200 and done["variances"] == [3, 
 
 # --- returns ---
 code, ret = call("POST", "/api/stock/returns", token=temple_t, body={
-    "location_id": 1, "reason": "unsold slow mover", "items": [{"book_id": 3, "qty": 2}],
+    "location_id": 1, "reason": None, "items": [{"book_id": 3, "qty": 2}],
 })
 check("return recorded", code == 200, ret)
 rid = ret["id"]
@@ -164,7 +165,7 @@ check("zone leader processes return (credits stock)", code == 200)
 
 # --- damaged write-off ---
 code, dmg = call("POST", "/api/stock/damaged", token=temple_t, body={
-    "location_id": 1, "book_id": 4, "qty": 1, "reason_code": "STAINED", "note": "coffee spill",
+    "location_id": 1, "book_id": 4, "qty": 1, "reason_code": "STAINED", "note": None,
 })
 check("damaged write-off", code == 200, dmg)
 code, _ = call("POST", "/api/stock/damaged", token=temple_t, body={
@@ -237,10 +238,16 @@ code, store_locations = call("GET", "/api/locations?type=store", token=super_t)
 check("location type filter", code == 200 and any(l["id"] == test_location_id for l in store_locations))
 code, _ = call("DELETE", f"/api/locations/{test_location_id}", token=super_t)
 check("unused child location can be deleted", code == 200)
+code, root_location = call("POST", "/api/locations", token=super_t, body={
+    "code": "SMOKE-ROOT", "name": "Smoke Root Location", "type": "warehouse", "parent_id": None,
+})
+check("root location accepts null parent id", code == 200 and root_location["code"] == "SMOKE-ROOT", root_location)
+code, _ = call("DELETE", f"/api/locations/{root_location.get('id')}", token=super_t)
+check("unused root location can be deleted", code == 200)
 
 # --- stock adjustment, ledger, and open-count deletion ---
 code, adjusted = call("POST", "/api/stock/adjust", token=temple_t, body={
-    "book_id": 1, "location_id": 1, "qty": 2, "note": "smoke adjustment",
+    "book_id": 1, "location_id": 1, "qty": 2, "note": None,
 })
 check("stock adjustment adds units", code == 200 and adjusted["qty"] == 10, adjusted)
 code, adjusted = call("POST", "/api/stock/adjust", token=temple_t, body={

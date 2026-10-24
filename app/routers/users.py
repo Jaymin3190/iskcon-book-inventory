@@ -23,12 +23,12 @@ class UserIn(BaseModel):
 
 
 class UserPatch(BaseModel):
-    name: str = None
-    password: str = None
-    role: str = None
+    name: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
     zone_id: Optional[int] = None
     location_id: Optional[int] = None
-    is_active: int = None
+    is_active: Optional[int] = None
 
 
 def sanitize(row) -> dict:

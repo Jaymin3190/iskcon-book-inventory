@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -61,7 +62,7 @@ class StockAdjustIn(BaseModel):
     book_id: int
     location_id: int
     qty: int
-    note: str = None
+    note: Optional[str] = None
 
 
 @router.post("/adjust")
@@ -182,7 +183,7 @@ class TransferItemIn(BaseModel):
 class TransferIn(BaseModel):
     from_location_id: int
     to_location_id: int
-    note: str = None
+    note: Optional[str] = None
     items: list[TransferItemIn]
 
 
@@ -355,7 +356,7 @@ class ReturnItemIn(BaseModel):
 
 class ReturnIn(BaseModel):
     location_id: int
-    reason: str = None
+    reason: Optional[str] = None
     items: list[ReturnItemIn]
 
 
@@ -457,7 +458,7 @@ class DamagedIn(BaseModel):
     book_id: int
     qty: int
     reason_code: str
-    note: str = None
+    note: Optional[str] = None
 
 
 @router.get("/damaged")

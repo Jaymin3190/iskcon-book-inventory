@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -13,7 +15,7 @@ class LocationIn(BaseModel):
     code: str
     name: str
     type: str
-    parent_id: int = None
+    parent_id: Optional[int] = None
 
 
 @router.get("")

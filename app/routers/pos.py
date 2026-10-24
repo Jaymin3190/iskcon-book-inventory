@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,12 +23,12 @@ class InvoiceItemIn(BaseModel):
 
 
 class InvoiceIn(BaseModel):
-    location_id: int = None
-    customer_name: str = None
-    customer_phone: str = None
-    customer_email: str = None
+    location_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_email: Optional[str] = None
     payment_mode: str = "cash"
-    payment_ref: str = None
+    payment_ref: Optional[str] = None
     discount: float = 0
     items: list[InvoiceItemIn]
 

@@ -9,7 +9,9 @@ async function api(path, opts = {}) {
   if (res.status === 401 && !opts.public) { logout(); throw new Error('Session expired'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const msg = Array.isArray(data.detail) ? data.detail.map(d => d.msg).join('; ') : (data.detail || res.statusText);
+    const msg = Array.isArray(data.detail)
+      ? data.detail.map(d => `${Array.isArray(d.loc) ? d.loc.join('.') + ': ' : ''}${d.msg}`).join('; ')
+      : (data.detail || res.statusText);
     throw new Error(msg);
   }
   return data;
