@@ -76,7 +76,13 @@ tr:hover td { background: #fbf7ec; }
   display: flex; align-items: center; justify-content: center; z-index: 50;
 }
 #modalBackdrop[hidden] { display: none; }
-#modalBox { background: #fffdf8; border-radius: 10px; padding: 22px; width: 620px; max-width: 94vw; max-height: 88vh; overflow: auto; }
+#modalBox { position: relative; background: #fffdf8; border-radius: 10px; padding: 22px; width: 620px; max-width: 94vw; max-height: 88vh; overflow: auto; }
+#modalBox .modal-close {
+  position: absolute; top: 8px; right: 10px; width: 32px; height: 32px;
+  border: 0; border-radius: 50%; background: transparent; color: #6b5a3a;
+  font-size: 24px; line-height: 1; cursor: pointer;
+}
+#modalBox .modal-close:hover { background: #f5efe2; color: #8a5a1f; }
 #modalBox h3 { color: #8a5a1f; margin-bottom: 14px; }
 .form-row { margin-bottom: 12px; }
 .form-row label { display: block; font-size: 12px; color: #6b5a3a; margin-bottom: 4px; }

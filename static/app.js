@@ -70,7 +70,10 @@ function showApp() {
 
 function refreshCurrent() { if (state.user) RENDER[state.activeTab]().catch(e => toast(e.message, 'error')); }
 
-function openModal(html) { document.getElementById('modalBox').innerHTML = html; document.getElementById('modalBackdrop').hidden = false; }
+function openModal(html) {
+  document.getElementById('modalBox').innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;
+  document.getElementById('modalBackdrop').hidden = false;
+}
 function closeModal() { document.getElementById('modalBackdrop').hidden = true; }
 document.getElementById('modalBackdrop').addEventListener('click', e => { if (e.target.id === 'modalBackdrop') closeModal(); });
 
