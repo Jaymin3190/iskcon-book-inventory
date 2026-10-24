@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -69,7 +70,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     discount = min(data.discount, subtotal)
     total = round(subtotal - discount, 2)
 
-    num = f"INV-{loc['code']}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    num = f"INV-{loc['code']}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
     cur = db.execute(
         """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone, customer_email,
                                  payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)

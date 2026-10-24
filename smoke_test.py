@@ -1,9 +1,10 @@
 import json
+import os
 import sys
 
 import urllib.request
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("SMOKE_TEST_BASE", "http://127.0.0.1:8000")
 passed = 0
 failed = 0
 
@@ -74,7 +75,7 @@ check("temple scoped locations", {l["id"] for l in locs} == {1})
 
 _, locs = call("GET", "/api/locations", token=zone_t)
 check("zone leader sees zone + temple", {l["id"] for l in locs} == {1, 2})
-check("6 zones exist", sum(1 for l in locs if l["type"] == "zone") == 1)
+check("zone leader sees one assigned zone", sum(1 for l in locs if l["type"] == "zone") == 1)
 
 _, all_locs = call("GET", "/api/locations", token=super_t)
 zone_names = [l["name"] for l in all_locs if l["type"] == "zone"]
@@ -192,6 +193,150 @@ _, ssum = call("GET", "/api/reports/stock-summary", token=super_t)
 check("stock summary lists all 7 locations", len(ssum) == 7)
 _, trail = call("GET", "/api/audit", token=super_t)
 check("audit trail logged actions", len(trail) >= 10)
+
+# --- catalogue CRUD ---
+code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)
+check("book search filters by title", code == 200 and len(found) == 1 and found[0]["id"] == 1)
+code, created_book = call("POST", "/api/books", token=super_t, body={
+    "title": "Smoke Test Book", "barcode": "SMOKE-BOOK-001", "price": 25,
+})
+check("book creation", code == 200 and created_book["barcode"] == "SMOKE-BOOK-001", created_book)
+test_book_id = created_book.get("id")
+code, _ = call("POST", "/api/books", token=super_t, body={
+    "title": "Duplicate Book", "barcode": "SMOKE-BOOK-001",
+})
+check("duplicate book barcode rejected", code == 409)
+code, _ = call("PATCH", f"/api/books/{test_book_id}", token=super_t, body={
+    "title": "Smoke Test Book Updated", "barcode": "SMOKE-BOOK-002",
+})
+check("book update changes title and barcode", code == 200)
+code, updated = call("GET", "/api/books/lookup/SMOKE-BOOK-002", token=super_t)
+check("updated book barcode is searchable", code == 200 and updated["title"] == "Smoke Test Book Updated")
+code, _ = call("PATCH", f"/api/books/{test_book_id}", token=super_t, body={
+    "barcode": "9780892131343",
+})
+check("book update rejects duplicate barcode", code == 409)
+code, _ = call("DELETE", "/api/books/1", token=super_t)
+check("book with stock/history cannot be deleted", code == 409)
+code, _ = call("DELETE", f"/api/books/{test_book_id}", token=super_t)
+check("unused book can be deleted", code == 200)
+
+# --- location CRUD ---
+code, temple_location = call("GET", "/api/locations/1", token=super_t)
+check("location detail", code == 200 and temple_location["code"] == "TEMPLE")
+code, created_location = call("POST", "/api/locations", token=super_t, body={
+    "code": "SMOKE-LOC", "name": "Smoke Test Location", "type": "store", "parent_id": 1,
+})
+check("location creation", code == 200 and created_location["code"] == "SMOKE-LOC")
+test_location_id = created_location.get("id")
+code, store_locations = call("GET", "/api/locations?type=store", token=super_t)
+check("location type filter", code == 200 and any(l["id"] == test_location_id for l in store_locations))
+code, _ = call("DELETE", f"/api/locations/{test_location_id}", token=super_t)
+check("unused child location can be deleted", code == 200)
+
+# --- stock adjustment, ledger, and open-count deletion ---
+code, adjusted = call("POST", "/api/stock/adjust", token=temple_t, body={
+    "book_id": 1, "location_id": 1, "qty": 2, "note": "smoke adjustment",
+})
+check("stock adjustment adds units", code == 200 and adjusted["qty"] == 10, adjusted)
+code, adjusted = call("POST", "/api/stock/adjust", token=temple_t, body={
+    "book_id": 1, "location_id": 1, "qty": -1, "note": "smoke adjustment reversal",
+})
+check("stock adjustment removes units", code == 200 and adjusted["qty"] == 9, adjusted)
+code, _ = call("POST", "/api/stock/adjust", token=temple_t, body={
+    "book_id": 1, "location_id": 1, "qty": -999,
+})
+check("stock adjustment prevents negative inventory", code == 400)
+code, ledger = call("GET", "/api/stock/ledger?location_id=1&book_id=1", token=temple_t)
+check("stock ledger filters by location and book", code == 200 and len(ledger) >= 1)
+code, open_count = call("POST", "/api/stock/counts", token=temple_t, body={"location_id": 1})
+open_count_id = open_count.get("count_id")
+code, _ = call("DELETE", f"/api/stock/counts/{open_count_id}", token=temple_t)
+check("open stock count can be deleted", code == 200)
+code, _ = call("DELETE", f"/api/stock/counts/{cid}", token=temple_t)
+check("completed stock count cannot be deleted", code == 409)
+
+# --- transfer read, reject, and delete ---
+code, transfer_rows = call("GET", "/api/stock/transfers", token=zone_t)
+check("transfer list", code == 200 and any(t["id"] == tid for t in transfer_rows))
+code, transfer_detail = call("GET", f"/api/stock/transfers/{tid}", token=zone_t)
+check("transfer detail includes items", code == 200 and len(transfer_detail["items"]) == 3)
+code, rejected_transfer = call("POST", "/api/stock/transfers", token=zone_t, body={
+    "from_location_id": 1, "to_location_id": 2, "items": [{"book_id": 1, "qty": 1}],
+})
+rejected_id = rejected_transfer.get("id")
+code, rejected = call("POST", f"/api/stock/transfers/{rejected_id}/reject", token=zone_t)
+check("requested transfer can be rejected", code == 200 and rejected["status"] == "rejected")
+code, _ = call("DELETE", f"/api/stock/transfers/{rejected_id}", token=zone_t)
+check("rejected transfer can be deleted", code == 200)
+
+# --- invoice list, delete, and stock restoration ---
+code, invoices = call("GET", "/api/pos/invoices", token=temple_t)
+check("invoice list includes created invoice", code == 200 and any(i["id"] == inv["invoice_id"] for i in invoices))
+_, before_invoice_rows = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
+before_invoice_delete = qty(before_invoice_rows, 1, 1)
+code, disposable_invoice = call("POST", "/api/pos/invoices", token=temple_t, body={
+    "payment_mode": "cash", "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+disposable_invoice_id = disposable_invoice.get("invoice_id")
+code, deletion = call("DELETE", f"/api/pos/invoices/{disposable_invoice_id}", token=temple_t)
+check("invoice deletion restores sold stock", code == 200 and deletion["restocked_lines"] == 1)
+code, restored_stock = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
+check("invoice deletion restores exact quantity", qty(restored_stock, 1, 1) == before_invoice_delete)
+
+# --- return deletion should restore the source stock ---
+before_return_delete = qty(restored_stock, 1, 1)
+code, disposable_return = call("POST", "/api/stock/returns", token=temple_t, body={
+    "location_id": 1, "reason": "delete-path test", "items": [{"book_id": 1, "qty": 1}],
+})
+disposable_return_id = disposable_return.get("id")
+code, _ = call("DELETE", f"/api/stock/returns/{disposable_return_id}", token=zone_t)
+check("recorded return can be deleted", code == 200)
+code, after_return_delete = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
+check("deleting recorded return restores source stock", qty(after_return_delete, 1, 1) == before_return_delete)
+
+# --- damaged record list and reversal ---
+code, damaged_rows = call("GET", "/api/stock/damaged", token=temple_t)
+check("damaged records list", code == 200 and len(damaged_rows) >= 1)
+code, disposable_damage = call("POST", "/api/stock/damaged", token=temple_t, body={
+    "location_id": 1, "book_id": 1, "qty": 1, "reason_code": "OTHER",
+})
+damage_id = disposable_damage.get("id")
+code, damage_delete = call("DELETE", f"/api/stock/damaged/{damage_id}", token=temple_t)
+check("deleting damage write-off restores stock", code == 200 and damage_delete["restocked_qty"] == 1)
+
+# --- user CRUD ---
+code, created_user = call("POST", "/api/users", token=super_t, body={
+    "username": "smoke-user", "password": "initial-smoke-password", "name": "Smoke User",
+    "role": "distributor", "zone_id": 2,
+})
+check("user creation", code == 200 and created_user["username"] == "smoke-user")
+test_user_id = created_user.get("id")
+code, users = call("GET", "/api/users", token=super_t)
+check("user list excludes password hashes", code == 200 and "password_hash" not in str(users))
+code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={
+    "name": "Updated Smoke User", "password": "updated-smoke-password",
+})
+check("user update and password change", code == 200)
+check("updated user password authenticates", bool(login("smoke-user", "updated-smoke-password")))
+code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={"is_active": 0})
+check("user can be disabled", code == 200 and login("smoke-user", "updated-smoke-password") is None)
+code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={"is_active": 1})
+check("user can be re-enabled", code == 200 and bool(login("smoke-user", "updated-smoke-password")))
+code, _ = call("DELETE", f"/api/users/{test_user_id}", token=super_t)
+check("user with audit history cannot be deleted", code == 409)
+code, disposable_user = call("POST", "/api/users", token=super_t, body={
+    "username": "smoke-delete-user", "password": "delete-smoke-password", "name": "Disposable Smoke User",
+    "role": "distributor", "zone_id": 2,
+})
+code, _ = call("DELETE", f"/api/users/{disposable_user.get('id')}", token=super_t)
+check("user without activity can be deleted", code == 200)
+
+# --- remaining report endpoints ---
+code, transfer_report = call("GET", "/api/reports/transfers", token=super_t)
+check("transfer report", code == 200 and isinstance(transfer_report, list))
+code, return_report = call("GET", "/api/reports/returns", token=super_t)
+check("returns report", code == 200 and isinstance(return_report, list))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

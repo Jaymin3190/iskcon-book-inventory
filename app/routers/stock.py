@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -245,7 +246,7 @@ def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_
     for it in data.items:
         if it.qty <= 0:
             raise HTTPException(400, "Quantities must be positive")
-    num = f"TRF-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    num = f"TRF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
     cur = db.execute(
         """INSERT INTO transfers (request_number, from_location_id, to_location_id, status, requested_by, note)
            VALUES (?,?,?, 'requested', ?, ?)""",
@@ -384,7 +385,7 @@ def create_return(data: ReturnIn, db=Depends(get_db), user=Depends(require_roles
             shortages.append(f"{book['title']} (need {it.qty})")
     if shortages:
         raise HTTPException(400, "Insufficient stock to return: " + ", ".join(shortages))
-    num = f"RET-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    num = f"RET-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
     cur = db.execute(
         "INSERT INTO returns (return_number, location_id, reason, created_by) VALUES (?,?,?,?)",
         (num, data.location_id, data.reason, user["id"]),
@@ -431,6 +432,19 @@ def delete_return(return_id: int, db=Depends(get_db), user=Depends(require_roles
         raise HTTPException(409, "Cannot delete: return already processed")
     if r["location_id"] not in location_ids(db, user):
         raise HTTPException(403, "Forbidden")
+    items = db.execute("SELECT * FROM return_items WHERE return_id = ?", (return_id,)).fetchall()
+    for item in items:
+        move_stock(
+            db,
+            item["book_id"],
+            r["location_id"],
+            item["qty"],
+            "RETURN_REVERSED",
+            "returns",
+            return_id,
+            user["id"],
+            "recorded return deleted",
+        )
     db.execute("DELETE FROM return_items WHERE return_id = ?", (return_id,))
     db.execute("DELETE FROM returns WHERE id = ?", (return_id,))
     db.commit()
