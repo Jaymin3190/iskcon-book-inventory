@@ -21,8 +21,8 @@ so code updates do not overwrite it.
    version supported by the account. Set its virtualenv to
    `/home/<username>/.virtualenvs/iskcon-book-inventory`.
 4. Edit the WSGI configuration file linked from the Web tab. Add the project
-   directory to `sys.path`, configure the database and secret key, and wrap
-   the FastAPI app with the ASGI-to-WSGI adapter:
+   directory to `sys.path`, configure the database and secret key, and import
+   the lazy ASGI-to-WSGI adapter:
 
    ```python
    import os
@@ -37,16 +37,13 @@ so code updates do not overwrite it.
    )
    os.environ["SECRET_KEY"] = "<generate-a-long-random-secret>"
 
-   from a2wsgi import ASGIMiddleware
-   from app.main import app
-
-   application = ASGIMiddleware(app)
+   from app.wsgi_adapter import application
    ```
 
    Replace `<username>` and set `SECRET_KEY` to a unique, randomly generated
-   value. Keep both settings in the WSGI file and do not commit secrets. Do
-   not import `application` from the project's `wsgi.py` here: PythonAnywhere
-   also loads a WSGI file, which can cause that import to resolve recursively.
+   value. Keep both settings in the WSGI file and do not commit secrets. The
+   adapter starts its event-loop thread on the first request so it is created
+   inside the uWSGI worker, not before the worker starts.
 5. Set the Web tab's source code and working directory to
    `/home/<username>/iskcon-book-inventory`, then reload the web app.
 
