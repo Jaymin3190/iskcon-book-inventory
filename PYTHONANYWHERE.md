@@ -59,6 +59,26 @@ to `~/iskcon-book-inventory-data/inventory.db` before the first deployment.
 Then ensure the WSGI `DATABASE_PATH` points to that copied file. Make a backup
 before replacing it or importing further changes.
 
+## Backing up the database
+
+The repository includes `scripts/backup_database.py`. Run it from the project
+checkout in a Bash console to create a timestamped, integrity-checked backup:
+
+```bash
+cd ~/iskcon-book-inventory
+~/.virtualenvs/iskcon-book-inventory/bin/python scripts/backup_database.py \
+  --database ~/iskcon-book-inventory-data/inventory.db \
+  --backup-dir ~/inventory-backups
+```
+
+The script uses SQLite's online backup API, checks database integrity and
+foreign-key consistency, and reports book, user, and stock counts. On
+PythonAnywhere it restricts the backup directory and backup file permissions
+to the account owner. Configure the **Tasks** tab to run this command daily if
+scheduled tasks are available on your plan. Periodically download a backup to
+another location and verify that it can be restored; backups on the same
+account do not protect against loss of account access.
+
 ## Notes
 
 - The free tier is intended for small projects and has storage, CPU, outbound
