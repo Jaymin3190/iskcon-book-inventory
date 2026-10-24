@@ -308,10 +308,20 @@ check("deleting damage write-off restores stock", code == 200 and damage_delete[
 # --- user CRUD ---
 code, created_user = call("POST", "/api/users", token=super_t, body={
     "username": "smoke-user", "password": "initial-smoke-password", "name": "Smoke User",
-    "role": "distributor", "zone_id": 2,
+    "role": "distributor", "zone_id": 2, "location_id": None,
 })
 check("user creation", code == 200 and created_user["username"] == "smoke-user")
 test_user_id = created_user.get("id")
+code, temple_user = call("POST", "/api/users", token=super_t, body={
+    "username": "smoke-temple-user", "password": "temple-smoke-password", "name": "Smoke Temple User",
+    "role": "temple", "zone_id": None, "location_id": 1,
+})
+check("temple user creation accepts null zone id", code == 200 and temple_user["username"] == "smoke-temple-user")
+code, admin_user = call("POST", "/api/users", token=super_t, body={
+    "username": "smoke-admin-user", "password": "admin-smoke-password", "name": "Smoke Admin User",
+    "role": "super_admin", "zone_id": None, "location_id": None,
+})
+check("super admin creation accepts null location ids", code == 200 and admin_user["username"] == "smoke-admin-user")
 code, users = call("GET", "/api/users", token=super_t)
 check("user list excludes password hashes", code == 200 and "password_hash" not in str(users))
 code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={

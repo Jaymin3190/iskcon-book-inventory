@@ -834,7 +834,7 @@ async function userForm(userId = null) {
   const u = userId ? (state.users || []).find(x => x.id === userId) : null;
   const locs = await api('/api/locations');
   const zones = locs.filter(l => l.type === 'zone');
-  const stores = locs.filter(l => l.type === 'store');
+  const stores = locs.filter(l => ['store', 'warehouse'].includes(l.type));
   const r = u?.role || 'temple';
   openModal(`<h3>${u ? 'Edit user — ' + esc(u.username) : 'New user'}</h3>
     <div class="form-grid">
@@ -852,7 +852,7 @@ async function userForm(userId = null) {
       <div class="form-row"><label>Zone (for Zone Admin / Distributor)</label>
         <select id="uZone"><option value="">— none —</option>${zones.map(z => `<option value="${z.id}" ${String(u?.zone_id) === String(z.id) ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}</select>
       </div>
-      <div class="form-row"><label>Store (for Temple)</label>
+      <div class="form-row"><label>Location (for Temple)</label>
         <select id="uStore"><option value="">— none —</option>${stores.map(s => `<option value="${s.id}" ${String(u?.location_id) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       </div>
       <div class="form-row"><label>Active</label>

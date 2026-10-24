@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -15,8 +17,8 @@ class UserIn(BaseModel):
     password: str
     name: str
     role: str
-    zone_id: int = None
-    location_id: int = None
+    zone_id: Optional[int] = None
+    location_id: Optional[int] = None
     is_active: int = 1
 
 
@@ -24,8 +26,8 @@ class UserPatch(BaseModel):
     name: str = None
     password: str = None
     role: str = None
-    zone_id: int = None
-    location_id: int = None
+    zone_id: Optional[int] = None
+    location_id: Optional[int] = None
     is_active: int = None
 
 
