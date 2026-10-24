@@ -102,3 +102,23 @@ tr:hover td { background: #fbf7ec; }
 tr.hl td { background: #fff3cd !important; }
 .hint { color: #8a6d3b; font-size: 12px; margin-bottom: 10px; }
 td .action, td .danger { margin-bottom: 2px; }
+
+@media (max-width: 600px) {
+  nav#tabs {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    overflow: visible;
+    padding: 6px 12px;
+  }
+  nav#tabs button {
+    width: 100%;
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid #eee4cf;
+  }
+  nav#tabs button.active {
+    border-bottom-color: #eee4cf;
+    border-left: 3px solid #8a5a1f;
+  }
+}
