@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -10,20 +12,20 @@ router = APIRouter(prefix="/api/books", tags=["books"])
 
 class BookIn(BaseModel):
     title: str
-    isbn: str = None
+    isbn: Optional[str] = None
     barcode: str
-    language: str = None
-    publication: str = None
+    language: Optional[str] = None
+    publication: Optional[str] = None
     price: float = 0
 
 
 class BookPatch(BaseModel):
-    title: str = None
-    isbn: str = None
-    barcode: str = None
-    language: str = None
-    publication: str = None
-    price: float = None
+    title: Optional[str] = None
+    isbn: Optional[str] = None
+    barcode: Optional[str] = None
+    language: Optional[str] = None
+    publication: Optional[str] = None
+    price: Optional[float] = None
 
 
 @router.get("")
@@ -75,10 +77,13 @@ def update_book(book_id: int, data: BookPatch, db=Depends(get_db), user=Depends(
             raise HTTPException(409, "A book with this barcode already exists")
     fields, values = [], []
     for key in ("title", "isbn", "barcode", "language", "publication", "price"):
+        if key not in data.model_fields_set:
+            continue
         val = getattr(data, key)
-        if val is not None:
-            fields.append(f"{key} = ?")
-            values.append(val)
+        if val is None and key in ("title", "barcode", "price"):
+            raise HTTPException(400, f"{key} cannot be null")
+        fields.append(f"{key} = ?")
+        values.append(val)
     if fields:
         values.append(book_id)
         db.execute(f"UPDATE books SET {', '.join(fields)} WHERE id = ?", values)

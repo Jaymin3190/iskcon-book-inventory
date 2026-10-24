@@ -199,6 +199,7 @@ code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)
 check("book search filters by title", code == 200 and len(found) == 1 and found[0]["id"] == 1)
 code, created_book = call("POST", "/api/books", token=super_t, body={
     "title": "Smoke Test Book", "barcode": "SMOKE-BOOK-001", "price": 25,
+    "isbn": None, "language": None, "publication": None,
 })
 check("book creation", code == 200 and created_book["barcode"] == "SMOKE-BOOK-001", created_book)
 test_book_id = created_book.get("id")
@@ -208,8 +209,11 @@ code, _ = call("POST", "/api/books", token=super_t, body={
 check("duplicate book barcode rejected", code == 409)
 code, _ = call("PATCH", f"/api/books/{test_book_id}", token=super_t, body={
     "title": "Smoke Test Book Updated", "barcode": "SMOKE-BOOK-002",
+    "isbn": None, "language": None, "publication": None,
 })
 check("book update changes title and barcode", code == 200)
+code, updated_book = call("GET", f"/api/books/lookup/SMOKE-BOOK-002", token=super_t)
+check("book update clears blank optional text fields", code == 200 and all(updated_book[field] is None for field in ("isbn", "language", "publication")))
 code, updated = call("GET", "/api/books/lookup/SMOKE-BOOK-002", token=super_t)
 check("updated book barcode is searchable", code == 200 and updated["title"] == "Smoke Test Book Updated")
 code, _ = call("PATCH", f"/api/books/{test_book_id}", token=super_t, body={
