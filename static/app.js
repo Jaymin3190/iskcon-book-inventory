@@ -623,10 +623,14 @@ async function pos() {
         <div class="form-row"><label>Phone</label><input id="custPhone"></div>
         <div class="form-row"><label>Email</label><input id="custEmail"></div>
         <div class="form-row"><label>Payment mode</label>
-          <select id="payMode"><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="ledger">Credit / Ledger</option></select>
+          <select id="payMode" onchange="toggleUpiQr()"><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="ledger">Credit / Ledger</option></select>
         </div>
         <div class="form-row"><label>Payment ref (optional)</label><input id="payRef"></div>
         <div class="form-row"><label>Discount (&#8377;)</label><input id="discount" type="number" min="0" value="0" oninput="renderCart()"></div>
+      </div>
+      <div id="upiQrPanel" class="upi-qr-panel" hidden>
+        <p>Scan this QR code to pay with UPI.</p>
+        <img src="/upi-qr.jpeg" alt="ISKCON Jamnagar Books and Gifts UPI payment QR code">
       </div>
       <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
         <div><strong>Total:</strong> <span id="cartTotal">&#8377;0.00</span></div>
@@ -635,7 +639,13 @@ async function pos() {
     </div>
     <video id="scanCam" hidden playsinline></video>`;
   renderCart();
+  toggleUpiQr();
   document.getElementById('scanInput').focus();
+}
+
+function toggleUpiQr() {
+  const panel = document.getElementById('upiQrPanel');
+  if (panel) panel.hidden = document.getElementById('payMode').value !== 'upi';
 }
 
 function addToCart(b) {
