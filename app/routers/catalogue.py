@@ -20,6 +20,7 @@ class BookIn(BaseModel):
 class BookPatch(BaseModel):
     title: str = None
     isbn: str = None
+    barcode: str = None
     language: str = None
     publication: str = None
     price: float = None
@@ -68,8 +69,12 @@ def update_book(book_id: int, data: BookPatch, db=Depends(get_db), user=Depends(
     row = db.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Book not found")
+    if data.barcode is not None:
+        dup = db.execute("SELECT id FROM books WHERE barcode = ? AND id != ?", (data.barcode, book_id)).fetchone()
+        if dup:
+            raise HTTPException(409, "A book with this barcode already exists")
     fields, values = [], []
-    for key in ("title", "isbn", "language", "publication", "price"):
+    for key in ("title", "isbn", "barcode", "language", "publication", "price"):
         val = getattr(data, key)
         if val is not None:
             fields.append(f"{key} = ?")

@@ -56,6 +56,32 @@ def stock_ledger(location_id: int = None, book_id: int = None, limit: int = 200,
     return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
+class StockAdjustIn(BaseModel):
+    book_id: int
+    location_id: int
+    qty: int
+    note: str = None
+
+
+@router.post("/adjust")
+def adjust_stock(data: StockAdjustIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+    if data.qty == 0:
+        raise HTTPException(400, "Quantity must not be zero")
+    if data.location_id not in location_ids(db, user):
+        raise HTTPException(403, "Forbidden")
+    book = db.execute("SELECT * FROM books WHERE id = ?", (data.book_id,)).fetchone()
+    if not book:
+        raise HTTPException(404, "Book not found")
+    change_type = "STOCK_IN" if data.qty > 0 else "STOCK_OUT"
+    try:
+        move_stock(db, data.book_id, data.location_id, data.qty, change_type, "manual", None, user["id"], data.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    new_qty = ensure_stock(db, data.book_id, data.location_id)
+    log_audit(db, user["id"], "STOCK_ADJUST", "stock", None, f"{book['title']} {data.qty:+d} at location {data.location_id} (now {new_qty})", user["username"])
+    return {"ok": True, "book_id": data.book_id, "location_id": data.location_id, "qty": new_qty}
+
+
 class CountItemIn(BaseModel):
     book_id: int
     counted_qty: int

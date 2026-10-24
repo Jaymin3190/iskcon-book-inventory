@@ -148,47 +148,86 @@ async function dashboard() {
     </div>`;
 }
 
+let bookQuery = '';
+let bookSearchTimer = null;
+
+function canManageBooks() { return ['super_admin', 'zone_admin'].includes(state.user.role); }
+
 async function books() {
-  const q = document.getElementById('bookSearch')?.value || '';
-  const rows = await api('/api/books' + (q ? '?q=' + encodeURIComponent(q) : ''));
-  const canEdit = ['super_admin', 'zone_admin'].includes(state.user.role);
+  const canEdit = canManageBooks();
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar">
-        <input id="bookSearch" placeholder="Search title / ISBN / barcode" style="flex:1" oninput="refreshCurrent()">
+        <input id="bookSearch" placeholder="Search title / ISBN / barcode" style="flex:1" value="${esc(bookQuery)}">
         ${canEdit ? '<button class="primary" onclick="bookForm()">+ New book</button>' : ''}
       </div>
+      ${canEdit ? '' : '<p class="hint">Only Super Admin and Zone Admin accounts can add or edit books.</p>'}
       <table>
-        <tr><th>Title</th><th>Barcode/ISBN</th><th>Language</th><th>Publication</th><th>Price</th></tr>
-        ${rows.map(b => `<tr ${b.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${esc(b.language || '')}</td><td>${esc(b.publication || '')}</td><td>&#8377;${b.price}</td></tr>`).join('')}
+        <tr><th>Title</th><th>Barcode</th><th>ISBN</th><th>Language</th><th>Publication</th><th>Price</th>${canEdit ? '<th>Actions</th>' : ''}</tr>
+        <tbody id="bookRows"></tbody>
       </table>
     </div>`;
+  const input = document.getElementById('bookSearch');
+  input.addEventListener('input', () => {
+    bookQuery = input.value;
+    clearTimeout(bookSearchTimer);
+    bookSearchTimer = setTimeout(loadBookRows, 250);
+  });
+  await loadBookRows();
   if (['super_admin', 'zone_admin', 'distributor', 'temple'].includes(state.user.role)) {
     pageScanStrip(() => refreshCurrent(), 'Scan a book barcode to highlight it in the list');
   }
 }
 
-async function bookForm() {
-  openModal(`<h3>New book</h3>
-    <div class="form-grid">
-      <div class="form-row"><label>Title *</label><input id="bkTitle"></div>
-      <div class="form-row"><label>Barcode/ISBN *</label><input id="bkBarcode" placeholder="e.g. 9780892131343"></div>
-      <div class="form-row"><label>Language</label><input id="bkLang"></div>
-      <div class="form-row"><label>Publication</label><input id="bkPub" placeholder="e.g. Bhaktivedanta Book Trust (BBT)"></div>
-      <div class="form-row"><label>Price (&#8377;)</label><input id="bkPrice" type="number" value="0"></div>
-    </div>
-    <button class="primary" onclick="bookCreate()">Save</button>`);
+async function loadBookRows() {
+  const rows = await api('/api/books' + (bookQuery ? '?q=' + encodeURIComponent(bookQuery) : ''));
+  state.books = rows;
+  const canEdit = canManageBooks();
+  const body = document.getElementById('bookRows');
+  if (!body) return;
+  body.innerHTML = rows.map(b => `<tr ${b.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}>
+    <td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${esc(b.isbn || '')}</td><td>${esc(b.language || '')}</td><td>${esc(b.publication || '')}</td><td>&#8377;${b.price}</td>
+    ${canEdit ? `<td><button class="action" onclick="bookForm(${b.id})">Edit</button><button class="danger" onclick="bookDelete(${b.id})">Delete</button></td>` : ''}
+  </tr>`).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" class="hint">No books found.</td></tr>`;
 }
 
-async function bookCreate() {
+function bookForm(bookId = null) {
+  const b = bookId ? (state.books || []).find(x => x.id === bookId) : null;
+  openModal(`<h3>${b ? 'Edit book' : 'New book'}</h3>
+    <div class="form-grid">
+      <div class="form-row"><label>Title *</label><input id="bkTitle" value="${esc(b?.title || '')}"></div>
+      <div class="form-row"><label>Barcode *</label><input id="bkBarcode" placeholder="e.g. 9780892131343" value="${esc(b?.barcode || '')}"></div>
+      <div class="form-row"><label>ISBN</label><input id="bkIsbn" placeholder="e.g. 9780892131343" value="${esc(b?.isbn || '')}"></div>
+      <div class="form-row"><label>Language</label><input id="bkLang" value="${esc(b?.language || '')}"></div>
+      <div class="form-row"><label>Publication</label><input id="bkPub" placeholder="e.g. Bhaktivedanta Book Trust (BBT)" value="${esc(b?.publication || '')}"></div>
+      <div class="form-row"><label>Price (&#8377;)</label><input id="bkPrice" type="number" min="0" value="${b?.price ?? 0}"></div>
+    </div>
+    <button class="primary" onclick="bookSave(${b ? b.id : 'null'})">${b ? 'Save changes' : 'Create book'}</button>`);
+}
+
+async function bookSave(bookId) {
+  const body = {
+    title: document.getElementById('bkTitle').value.trim(),
+    barcode: document.getElementById('bkBarcode').value.trim(),
+    isbn: document.getElementById('bkIsbn').value.trim() || null,
+    language: document.getElementById('bkLang').value.trim() || null,
+    publication: document.getElementById('bkPub').value.trim() || null,
+    price: Number(document.getElementById('bkPrice').value) || 0,
+  };
+  if (!body.title || !body.barcode) { toast('Title and barcode are required', 'error'); return; }
   try {
-    await api('/api/books', { method: 'POST', body: {
-      title: document.getElementById('bkTitle').value, barcode: document.getElementById('bkBarcode').value.trim(),
-      isbn: document.getElementById('bkBarcode').value.trim(), language: document.getElementById('bkLang').value,
-      publication: document.getElementById('bkPub').value,
-      price: Number(document.getElementById('bkPrice').value) || 0,
-    }});
-    closeModal(); toast('Book added', 'success'); refreshCurrent();
+    if (bookId) await api('/api/books/' + bookId, { method: 'PATCH', body });
+    else await api('/api/books', { method: 'POST', body });
+    closeModal(); toast(bookId ? 'Book updated' : 'Book added', 'success'); refreshCurrent();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function bookDelete(bookId) {
+  const b = (state.books || []).find(x => x.id === bookId);
+  if (!confirm(`Delete book "${b ? b.title : bookId}"? This cannot be undone.`)) return;
+  try {
+    await api('/api/books/' + bookId, { method: 'DELETE' });
+    toast('Book deleted', 'success'); refreshCurrent();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -203,23 +242,62 @@ async function stock() {
           <option value="">All locations</option>
           ${locs.map(l => `<option value="${l.id}" ${String(l.id) === stockLocFilter ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
         </select>
-        <button class="primary" onclick="stockCountModal()">Start stock count</button>
+        <button class="primary" onclick="stockAdjustModal()">+ Add / adjust stock</button>
+        <button class="action" onclick="stockCountModal()">Start stock count</button>
         <button class="action" onclick="showLedger()">Stock ledger</button>
       </div>
       <table>
-        <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th></tr>
-        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td>${r.qty}</td><td>&#8377;${r.price}</td><td>&#8377;${(r.qty * r.price).toFixed(2)}</td></tr>`).join('')}
+        <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th><th>Actions</th></tr>
+        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td>${r.qty}</td><td>&#8377;${r.price}</td><td>&#8377;${(r.qty * r.price).toFixed(2)}</td><td><button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button><button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button></td></tr>`).join('') || '<tr><td colspan="8" class="hint">No stock rows found.</td></tr>'}
       </table>
     </div>`;
   pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row');
 }
 
-async function showLedger() {
-  const rows = await api('/api/stock/ledger' + (stockLocFilter ? '?location_id=' + stockLocFilter : '') + '&limit=200');
-  openModal(`<h3>Stock ledger (movements)</h3>
+async function stockAdjustModal(bookId = null, locationId = null) {
+  const [locs, books] = await Promise.all([api('/api/locations'), api('/api/books')]);
+  state.books = books;
+  openModal(`<h3>Add / adjust stock</h3>
+    <div class="form-grid">
+      <div class="form-row"><label>Location</label><select id="saLoc">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Book</label><select id="saBook"><option value="">Select book</option>${books.map(b => `<option value="${b.id}">${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}</select></div>
+      <div class="form-row"><label>Direction</label><select id="saDir"><option value="in">Stock in (+)</option><option value="out">Stock out (-)</option></select></div>
+      <div class="form-row"><label>Quantity</label><input id="saQty" type="number" min="1" value="1"></div>
+    </div>
+    <div class="form-row"><label>Note / reason</label><input id="saNote" placeholder="e.g. opening stock, purchase, correction"></div>
+    <button class="primary" onclick="stockAdjustSubmit()">Save</button>`);
+  if (locationId) document.getElementById('saLoc').value = String(locationId);
+  if (bookId) document.getElementById('saBook').value = String(bookId);
+}
+
+async function stockAdjustSubmit() {
+  const bookId = Number(document.getElementById('saBook').value);
+  if (!bookId) { toast('Select a book', 'error'); return; }
+  const qty = Number(document.getElementById('saQty').value) || 0;
+  if (qty <= 0) { toast('Quantity must be positive', 'error'); return; }
+  const direction = document.getElementById('saDir').value;
+  try {
+    const res = await api('/api/stock/adjust', { method: 'POST', body: {
+      book_id: bookId,
+      location_id: Number(document.getElementById('saLoc').value),
+      qty: direction === 'in' ? qty : -qty,
+      note: document.getElementById('saNote').value.trim() || null,
+    }});
+    closeModal(); toast('Stock updated. New quantity: ' + res.qty, 'success'); refreshCurrent();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function showLedger(locationId = null, bookId = null) {
+  const params = new URLSearchParams({ limit: '200' });
+  const loc = locationId ?? stockLocFilter;
+  if (loc) params.set('location_id', loc);
+  if (bookId) params.set('book_id', bookId);
+  const rows = await api('/api/stock/ledger?' + params.toString());
+  const book = bookId ? (state.books || []).find(b => b.id === bookId) : null;
+  openModal(`<h3>Stock ledger (movements)${book ? ' — ' + esc(book.title) : ''}</h3>
     <table>
-      <tr><th>Time</th><th>Location</th><th>Title</th><th>Type</th><th>Qty</th><th>Ref</th><th>User</th></tr>
-      ${rows.map(m => `<tr><td>${esc(m.created_at)}</td><td>${esc(m.location_code)}</td><td>${esc(m.title)}</td><td>${esc(m.change_type)}</td><td>${m.qty}</td><td>${esc(m.ref_type || '')}${m.ref_id ? '#' + m.ref_id : ''}</td><td>${esc(m.user_name || '')}</td></tr>`).join('')}
+      <tr><th>Time</th><th>Location</th><th>Title</th><th>Type</th><th>Qty</th><th>Ref</th><th>Note</th><th>User</th></tr>
+      ${rows.map(m => `<tr><td>${esc(m.created_at)}</td><td>${esc(m.location_code)}</td><td>${esc(m.title)}</td><td>${esc(m.change_type)}</td><td>${m.qty}</td><td>${esc(m.ref_type || '')}${m.ref_id ? '#' + m.ref_id : ''}</td><td>${esc(m.note || '')}</td><td>${esc(m.user_name || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">No movements yet.</td></tr>'}
     </table>`);
 }
 
@@ -284,12 +362,20 @@ function transferActions(t, role) {
     h += `<button class="action" onclick="tAction(${t.id},'dispatch')">Dispatch</button>`;
   if (t.status === 'dispatched' && (role === 'super_admin' || role === 'temple' || role === 'zone_admin' || role === 'distributor'))
     h += `<button class="action" onclick="tAction(${t.id},'receive')">Receive</button>`;
+  if ((t.status === 'requested' || t.status === 'rejected') && (role === 'super_admin' || role === 'zone_admin'))
+    h += `<button class="danger" onclick="tDelete(${t.id})">Delete</button>`;
   return h || '&mdash;';
 }
 
 async function tAction(id, action) {
   if (!confirm(`Confirm: ${action} transfer #${id}?`)) return;
   try { await api(`/api/stock/transfers/${id}/${action}`, { method: 'POST' }); toast('Transfer ' + action + 'd', 'success'); refreshCurrent(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
+async function tDelete(id) {
+  if (!confirm(`Delete transfer request #${id}?`)) return;
+  try { await api('/api/stock/transfers/' + id, { method: 'DELETE' }); toast('Transfer deleted', 'success'); refreshCurrent(); }
   catch (e) { toast(e.message, 'error'); }
 }
 
@@ -372,13 +458,13 @@ async function renderReturns() {
         ${rows.map(r => `<tr>
           <td>${esc(r.return_number)}</td><td>${esc(r.location_name)}</td><td>${esc(r.reason || '')}</td><td>${r.units}</td>
           <td><span class="badge ${esc(r.status)}">${esc(r.status)}</span></td>
-          <td>${(r.status === 'recorded' && canProc) ? `<button class="action" onclick="processReturn(${r.id})">Process</button>` : '&mdash;'}</td>
-        </tr>`).join('')}
+          <td>${(r.status === 'recorded' && canProc) ? `<button class="action" onclick="processReturn(${r.id})">Process</button><button class="danger" onclick="rDelete(${r.id})">Delete</button>` : '&mdash;'}</td>
+        </tr>`).join('') || '<tr><td colspan="6" class="hint">No returns recorded.</td></tr>'}
       </table>
     </div>
     <div class="card"><h2>Damaged write-offs</h2>
-      <table><tr><th>Time</th><th>Location</th><th>Title</th><th>Qty</th><th>Reason</th></tr>
-        ${damaged.map(d => `<tr><td>${esc(d.created_at)}</td><td>${esc(d.location_code)}</td><td>${esc(d.title)}</td><td>${d.qty}</td><td>${esc(d.reason_code)}</td></tr>`).join('')}
+      <table><tr><th>Time</th><th>Location</th><th>Title</th><th>Qty</th><th>Reason</th><th>Actions</th></tr>
+        ${damaged.map(d => `<tr><td>${esc(d.created_at)}</td><td>${esc(d.location_code)}</td><td>${esc(d.title)}</td><td>${d.qty}</td><td>${esc(d.reason_code)}</td><td>${canProc ? `<button class="danger" onclick="dDelete(${d.id})">Undo</button>` : '&mdash;'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No damaged write-offs.</td></tr>'}
       </table>
     </div>`;
 }
@@ -450,6 +536,18 @@ async function prSubmit(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function rDelete(id) {
+  if (!confirm(`Delete return #${id}?`)) return;
+  try { await api('/api/stock/returns/' + id, { method: 'DELETE' }); toast('Return deleted', 'success'); refreshCurrent(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
+async function dDelete(id) {
+  if (!confirm(`Undo damaged write-off #${id}? Stock will be restored.`)) return;
+  try { await api('/api/stock/damaged/' + id, { method: 'DELETE' }); toast('Write-off reversed', 'success'); refreshCurrent(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
 async function damagedForm() {
   const [locs, books] = await Promise.all([api('/api/locations'), api('/api/books')]);
   state.books = books;
@@ -508,6 +606,7 @@ async function pos() {
         </select>
         <input id="scanInput" placeholder="Scan / type barcode or ISBN, press Enter" style="flex:1" onkeydown="if(event.key==='Enter')doScan(this.value)">
         <button class="primary" onclick="cameraScan()">Camera scan</button>
+        <button class="action" onclick="invoiceList()">Invoice history</button>
         <select id="manualBook" onchange="posAddBySelect(this.value)" style="max-width:260px">
           <option value="">&mdash; manual search &mdash;</option>
           ${books.map(b => `<option value="${b.barcode}">${esc(b.title)}</option>`).join('')}
@@ -632,9 +731,46 @@ async function checkout() {
     openModal(`<h3>Invoice ${esc(res.invoice_number)}</h3>
       <p>Total: &#8377;${res.total.toFixed(2)} &nbsp;(subtotal &#8377;${res.subtotal.toFixed(2)}, discount &#8377;${res.discount.toFixed(2)})</p>
       <p style="font-size:13px;color:#6b5a3a">Payment: ${esc(payMode.toUpperCase())}${payRef ? ' (' + esc(payRef) + ')' : ''}</p>
-      <button class="primary" onclick="window.open('/api/pos/invoices/${res.invoice_id}/print','_blank')">Print / download invoice</button>
+      <button class="primary" onclick="printInvoice(${res.invoice_id})">Print / download invoice</button>
       <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>`);
     toast('Billed: ' + res.invoice_number, 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function printInvoice(invoiceId) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups to print the invoice', 'error'); return; }
+  try {
+    const res = await fetch('/api/pos/invoices/' + invoiceId + '/print', { headers: { Authorization: 'Bearer ' + state.token } });
+    if (!res.ok) throw new Error('Could not load invoice');
+    const html = await res.text();
+    w.document.write(html);
+    w.document.close();
+  } catch (e) {
+    try { w.close(); } catch (_) {}
+    toast(e.message, 'error');
+  }
+}
+
+async function invoiceList() {
+  const rows = await api('/api/pos/invoices');
+  openModal(`<h3>Invoice history</h3>
+    <table>
+      <tr><th>Invoice</th><th>Date</th><th>Location</th><th>Customer</th><th>Payment</th><th>Total</th><th>Actions</th></tr>
+      ${rows.map(i => `<tr>
+        <td>${esc(i.invoice_number)}</td><td>${esc(i.created_at)}</td><td>${esc(i.location_name)}</td>
+        <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td>&#8377;${Number(i.total).toFixed(2)}</td>
+        <td><button class="action" onclick="printInvoice(${i.id})">Print</button><button class="danger" onclick="invoiceDelete(${i.id})">Delete</button></td>
+      </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>'}
+    </table>`);
+}
+
+async function invoiceDelete(invoiceId) {
+  if (!confirm(`Delete invoice #${invoiceId}? Stock will be returned to the location.`)) return;
+  try {
+    await api('/api/pos/invoices/' + invoiceId, { method: 'DELETE' });
+    toast('Invoice deleted and stock restored', 'success');
+    invoiceList();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -670,53 +806,101 @@ async function reports() {
     ${auditHtml}`;
 }
 
+const ROLE_LABELS = { super_admin: 'Super Admin', zone_admin: 'Zone Admin', distributor: 'Distributor', temple: 'Temple / Store' };
+
 async function users() {
   const rows = await api('/api/users');
-  const canCreate = state.user.role === 'super_admin';
+  state.users = rows;
+  const canEdit = state.user.role === 'super_admin';
   document.getElementById('content').innerHTML = `
     <div class="card">
-      <div class="toolbar">${canCreate ? '<button class="primary" onclick="userForm()">+ New user</button>' : ''}</div>
+      <div class="toolbar">${canEdit ? '<button class="primary" onclick="userForm()">+ New user</button>' : ''}</div>
       <table>
-        <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Location</th><th>Active</th></tr>
-        ${rows.map(u => `<tr><td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${esc(u.role)}</td><td>${esc(u.zone_name || '')}</td><td>${esc(u.location_name || '')}</td><td>${u.is_active ? 'Yes' : 'No'}</td></tr>`).join('')}
+        <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Location</th><th>Active</th>${canEdit ? '<th>Actions</th>' : ''}</tr>
+        ${rows.map(u => `<tr>
+          <td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
+          <td>${esc(u.zone_name || '')}</td><td>${esc(u.location_name || '')}</td><td>${u.is_active ? 'Yes' : 'No'}</td>
+          ${canEdit ? `<td>
+            <button class="action" onclick="userForm(${u.id})">Edit</button>
+            <button class="action" onclick="userToggle(${u.id})">${u.is_active ? 'Disable' : 'Enable'}</button>
+            <button class="danger" onclick="userDelete(${u.id})">Delete</button>
+          </td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" class="hint">No users found.</td></tr>`}
       </table>
     </div>`;
 }
 
-async function userForm() {
+async function userForm(userId = null) {
+  const u = userId ? (state.users || []).find(x => x.id === userId) : null;
   const locs = await api('/api/locations');
   const zones = locs.filter(l => l.type === 'zone');
   const stores = locs.filter(l => l.type === 'store');
-  openModal(`<h3>New user</h3>
+  const r = u?.role || 'temple';
+  openModal(`<h3>${u ? 'Edit user — ' + esc(u.username) : 'New user'}</h3>
     <div class="form-grid">
-      <div class="form-row"><label>Username *</label><input id="uUser"></div>
-      <div class="form-row"><label>Password *</label><input id="uPass"></div>
-      <div class="form-row"><label>Name *</label><input id="uName"></div>
+      <div class="form-row"><label>Username ${u ? '' : '*'}</label><input id="uUser" value="${esc(u?.username || '')}" ${u ? 'disabled' : ''}></div>
+      <div class="form-row"><label>Password ${u ? '(leave blank to keep)' : '*'}</label><input id="uPass" type="password"></div>
+      <div class="form-row"><label>Name *</label><input id="uName" value="${esc(u?.name || '')}"></div>
       <div class="form-row"><label>Role</label>
-        <select id="uRole"><option value="zone_admin">Zone Admin</option><option value="distributor">Distributor</option><option value="temple">Temple / Store</option></select>
+        <select id="uRole">
+          <option value="super_admin" ${r === 'super_admin' ? 'selected' : ''}>Super Admin</option>
+          <option value="zone_admin" ${r === 'zone_admin' ? 'selected' : ''}>Zone Admin</option>
+          <option value="distributor" ${r === 'distributor' ? 'selected' : ''}>Distributor</option>
+          <option value="temple" ${r === 'temple' ? 'selected' : ''}>Temple / Store</option>
+        </select>
       </div>
       <div class="form-row"><label>Zone (for Zone Admin / Distributor)</label>
-        <select id="uZone">${zones.map(z => `<option value="${z.id}">${esc(z.name)}</option>`).join('')}</select>
+        <select id="uZone"><option value="">— none —</option>${zones.map(z => `<option value="${z.id}" ${String(u?.zone_id) === String(z.id) ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}</select>
       </div>
       <div class="form-row"><label>Store (for Temple)</label>
-        <select id="uStore"><option value="">— none —</option>${stores.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+        <select id="uStore"><option value="">— none —</option>${stores.map(s => `<option value="${s.id}" ${String(u?.location_id) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      </div>
+      <div class="form-row"><label>Active</label>
+        <select id="uActive"><option value="1" ${u?.is_active !== 0 ? 'selected' : ''}>Yes</option><option value="0" ${u?.is_active === 0 ? 'selected' : ''}>No</option></select>
       </div>
     </div>
-    <button class="primary" onclick="userCreate()">Create</button>`);
+    <button class="primary" onclick="userSave(${u ? u.id : 'null'})">${u ? 'Save changes' : 'Create user'}</button>`);
 }
 
-async function userCreate() {
+async function userSave(userId) {
+  const role = document.getElementById('uRole').value;
+  const password = document.getElementById('uPass').value;
+  const body = {
+    name: document.getElementById('uName').value.trim(),
+    role,
+    zone_id: role === 'super_admin' ? null : (Number(document.getElementById('uZone').value) || null),
+    location_id: role === 'temple' ? (Number(document.getElementById('uStore').value) || null) : null,
+    is_active: Number(document.getElementById('uActive').value),
+  };
+  if (password) body.password = password;
+  if (!body.name) { toast('Name is required', 'error'); return; }
   try {
-    const role = document.getElementById('uRole').value;
-    await api('/api/users', { method: 'POST', body: {
-      username: document.getElementById('uUser').value.trim(),
-      password: document.getElementById('uPass').value,
-      name: document.getElementById('uName').value.trim(),
-      role,
-      zone_id: Number(document.getElementById('uZone').value) || null,
-      location_id: role === 'temple' ? Number(document.getElementById('uStore').value) || null : null,
-    }});
-    closeModal(); toast('User created', 'success'); refreshCurrent();
+    if (userId) {
+      await api('/api/users/' + userId, { method: 'PATCH', body });
+    } else {
+      const username = document.getElementById('uUser').value.trim();
+      if (!username || !password) { toast('Username and password are required', 'error'); return; }
+      await api('/api/users', { method: 'POST', body: { ...body, username, password } });
+    }
+    closeModal(); toast(userId ? 'User updated' : 'User created', 'success'); refreshCurrent();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function userToggle(userId) {
+  const u = (state.users || []).find(x => x.id === userId);
+  if (!u) return;
+  try {
+    await api('/api/users/' + userId, { method: 'PATCH', body: { is_active: u.is_active ? 0 : 1 } });
+    toast(u.is_active ? 'User disabled' : 'User enabled', 'success'); refreshCurrent();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function userDelete(userId) {
+  const u = (state.users || []).find(x => x.id === userId);
+  if (!confirm(`Delete user "${u ? u.username : userId}"?`)) return;
+  try {
+    await api('/api/users/' + userId, { method: 'DELETE' });
+    toast('User deleted', 'success'); refreshCurrent();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -726,10 +910,18 @@ async function locations() {
     <div class="card">
       <div class="toolbar"><button class="primary" onclick="locationForm()">+ New location</button></div>
       <table>
-        <tr><th>Code</th><th>Name</th><th>Type</th><th>Parent</th></tr>
-        ${rows.map(l => `<tr><td>${esc(l.code)}</td><td>${esc(l.name)}</td><td>${esc(l.type)}</td><td>${esc(l.parent_name || '')}</td></tr>`).join('')}
+        <tr><th>Code</th><th>Name</th><th>Type</th><th>Parent</th><th>Actions</th></tr>
+        ${rows.map(l => `<tr><td>${esc(l.code)}</td><td>${esc(l.name)}</td><td>${esc(l.type)}</td><td>${esc(l.parent_name || '')}</td><td><button class="danger" onclick="locationDelete(${l.id})">Delete</button></td></tr>`).join('')}
       </table>
     </div>`;
+}
+
+async function locationDelete(locationId) {
+  if (!confirm(`Delete location #${locationId}?`)) return;
+  try {
+    await api('/api/locations/' + locationId, { method: 'DELETE' });
+    toast('Location deleted', 'success'); refreshCurrent();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function locationForm() {
