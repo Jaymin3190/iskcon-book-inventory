@@ -5,17 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
 <title>ISKCON Book Inventory &amp; Distribution</title>
-<link rel="stylesheet" href="style.css?v=8">
+<link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
 <div id="loginView">
   <div class="login-card">
-    <h1>ISKCON Book Distribution</h1>
-    <p class="sub">Book Inventory &amp; Distribution Management System</p>
-    <input id="loginUser" placeholder="Username" autocomplete="username">
-    <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password">
-    <button id="loginBtn">Sign in</button>
+    <div class="login-brand">
+      <span class="login-mark" aria-hidden="true">IB</span>
+      <span class="login-brand-name">ISKCON<small>BOOK DISTRIBUTION</small></span>
+    </div>
+    <div class="login-heading">
+      <p class="login-eyebrow">Inventory management</p>
+      <h1>Welcome back</h1>
+      <p class="sub">Sign in to manage your books and stock.</p>
+    </div>
+    <label for="loginUser">Username</label>
+    <input id="loginUser" placeholder="Enter your username" autocomplete="username">
+    <label for="loginPass">Password</label>
+    <input id="loginPass" type="password" placeholder="Enter your password" autocomplete="current-password">
+    <button id="loginBtn">Sign in <span aria-hidden="true">&rarr;</span></button>
     <p id="loginError" class="error"></p>
+    <p class="login-footer">Book Inventory &amp; Distribution Management System</p>
   </div>
 </div>
 

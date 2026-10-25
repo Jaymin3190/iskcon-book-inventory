@@ -8,22 +8,58 @@ body {
 }
 
 #loginView {
+  position: relative;
   display: flex; align-items: center; justify-content: center;
-  min-height: 100vh; background: linear-gradient(160deg, #8a5a1f 0%, #b8732c 60%, #e0b276 100%);
+  min-height: 100vh; padding: 24px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 12% 8%, rgba(224, 178, 118, .42), transparent 38%),
+    radial-gradient(ellipse at 90% 92%, rgba(111, 149, 112, .2), transparent 35%),
+    linear-gradient(145deg, #f8f4e9, #eee6d5);
 }
 #loginView[hidden] { display: none; }
 
 .login-card {
-  background: #fffdf8; padding: 32px 36px; border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0,0,0,.25); width: 340px;
+  position: relative; z-index: 1;
+  background: rgba(255, 253, 248, .96); padding: 38px 40px 24px;
+  border: 1px solid rgba(216, 201, 168, .72); border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(69, 48, 21, .16), 0 4px 14px rgba(69, 48, 21, .06);
+  width: min(100%, 420px);
 }
 
-.login-card h1 { font-size: 22px; color: #8a5a1f; margin-bottom: 4px; }
-.login-card .sub { color: #8a6d3b; font-size: 13px; margin-bottom: 20px; }
-.login-card input { width: 100%; padding: 10px 12px; margin-bottom: 12px; border: 1px solid #d8c9a8; border-radius: 6px; font-size: 14px; }
-.login-card button { width: 100%; padding: 11px; background: #8a5a1f; color: #fff; border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
-.login-card button:hover { background: #714814; }
+.login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 34px; }
+.login-mark {
+  display: grid; place-items: center; width: 46px; height: 46px;
+  border-radius: 14px; background: linear-gradient(145deg, #9c6728, #744718);
+  color: #fffdf8; font-size: 15px; font-weight: 700; letter-spacing: .04em;
+  box-shadow: 0 5px 12px rgba(116, 71, 24, .2);
+}
+.login-brand-name { color: #493516; font-size: 15px; font-weight: 700; letter-spacing: .09em; }
+.login-brand-name small { display: block; margin-top: 3px; color: #8a6d3b; font-size: 9px; letter-spacing: .18em; }
+.login-heading { margin-bottom: 25px; }
+.login-eyebrow { margin-bottom: 7px; color: #6c8a63; font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.login-card h1 { color: #382b19; font-size: 30px; letter-spacing: -.035em; line-height: 1.2; margin-bottom: 8px; }
+.login-card .sub { color: #786b58; font-size: 14px; line-height: 1.5; }
+.login-card label { display: block; margin: 0 0 7px; color: #51432f; font-size: 12px; font-weight: 600; }
+.login-card input {
+  width: 100%; padding: 12px 13px; margin-bottom: 17px;
+  border: 1px solid #ded4c1; border-radius: 8px; background: #fff;
+  color: #2a2419; font-size: 14px; transition: border-color .15s, box-shadow .15s;
+}
+.login-card input::placeholder { color: #a59a88; }
+.login-card input:focus { outline: none; border-color: #8a5a1f; box-shadow: 0 0 0 3px rgba(138, 90, 31, .13); }
+.login-card button {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; padding: 12px; background: linear-gradient(105deg, #8a5a1f, #a96d29);
+  color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
+  cursor: pointer; box-shadow: 0 5px 12px rgba(138, 90, 31, .18);
+  transition: background .15s, box-shadow .15s, transform .15s;
+}
+.login-card button span { font-size: 18px; line-height: 1; }
+.login-card button:hover { background: linear-gradient(105deg, #714814, #8a5a1f); box-shadow: 0 7px 16px rgba(138, 90, 31, .24); transform: translateY(-1px); }
+.login-card button:focus-visible { outline: 3px solid #6c8a63; outline-offset: 3px; }
 .error { color: #b3261e; font-size: 13px; margin-top: 8px; min-height: 16px; }
+.login-footer { margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee6d8; color: #948873; font-size: 11px; text-align: center; }
 header {
   background: #8a5a1f; color: #fff; padding: 12px 20px;
   display: flex; align-items: center; justify-content: space-between;
@@ -135,6 +171,10 @@ tr.hl td { background: #fff3cd !important; }
 td .action, td .danger { margin-bottom: 2px; }
 
 @media (max-width: 600px) {
+  #loginView { padding: 18px; }
+  .login-card { padding: 30px 25px 20px; border-radius: 15px; }
+  .login-brand { margin-bottom: 28px; }
+  .login-card h1 { font-size: 27px; }
   header {
     flex-wrap: wrap;
     gap: 10px;
