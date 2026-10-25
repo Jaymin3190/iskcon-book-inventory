@@ -131,14 +131,14 @@ async function dashboard() {
   const open = tf.filter(t => t.status === 'requested').reduce((a, t) => a + t.n, 0);
   document.getElementById('content').innerHTML = `
     <div class="stats">
-      <div class="stat"><div class="num">${totalUnits}</div><div class="lbl">Units on hand</div></div>
-      <div class="stat"><div class="num">&#8377;${totalValue.toFixed(0)}</div><div class="lbl">Stock value</div></div>
+      <div class="stat stock-units-stat"><div class="num">${totalUnits}</div><div class="lbl">Units on hand</div></div>
+      <div class="stat stock-value-stat"><div class="num">&#8377;${totalValue.toFixed(0)}</div><div class="lbl">Stock value</div></div>
       <div class="stat"><div class="num">&#8377;${revenue.toFixed(0)}</div><div class="lbl">Sales revenue</div></div>
       <div class="stat"><div class="num">${open}</div><div class="lbl">Open transfer requests</div></div>
     </div>
-    <div class="card"><h2>Stock summary by location</h2>
-      <table><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
-        ${stock.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.type)}</td><td>${s.skus}</td><td>${s.total_units}</td><td>&#8377;${(s.stock_value || 0).toFixed(0)}</td></tr>`).join('')}
+    <div class="card stock-summary-card"><h2>Stock summary by location</h2>
+      <table class="stock-summary-table"><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
+        ${stock.map(s => `<tr><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${(s.stock_value || 0).toFixed(0)}</span></td></tr>`).join('')}
       </table>
     </div>
     <div class="card"><h2>Sales by location</h2>
@@ -251,9 +251,9 @@ async function stock() {
         <button class="action" onclick="stockCountModal()">Start stock count</button>
         <button class="action" onclick="showLedger()">Stock ledger</button>
       </div>
-      <table>
+      <table class="stock-inventory-table">
         <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th><th>Actions</th></tr>
-        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td>${r.qty}</td><td>&#8377;${r.price}</td><td>&#8377;${(r.qty * r.price).toFixed(2)}</td><td><button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button><button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button></td></tr>`).join('') || '<tr><td colspan="8" class="hint">No stock rows found.</td></tr>'}
+        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td><td><button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button><button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button></td></tr>`).join('') || '<tr><td colspan="8" class="hint">No stock rows found.</td></tr>'}
       </table>
     </div>`;
   pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row');
@@ -810,9 +810,9 @@ async function reports() {
       <table><tr><th>Book</th><th>Barcode</th><th>Units sold</th><th>Revenue</th></tr>
         ${byBook.map(b => `<tr><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${b.qty_sold}</td><td>&#8377;${b.revenue.toFixed(2)}</td></tr>`).join('')}
       </table></div>
-    <div class="card"><h2>Stock summary</h2>
-      <table><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
-        ${stockSum.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.type)}</td><td>${s.skus}</td><td>${s.total_units}</td><td>&#8377;${s.stock_value.toFixed(0)}</td></tr>`).join('')}
+    <div class="card stock-summary-card"><h2>Stock summary</h2>
+      <table class="stock-summary-table"><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
+        ${stockSum.map(s => `<tr><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${s.stock_value.toFixed(0)}</span></td></tr>`).join('')}
       </table></div>
     <div class="card"><h2>Transfers by status</h2>
       <table><tr><th>Status</th><th>Count</th></tr>

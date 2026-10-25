@@ -100,6 +100,28 @@ tr:hover td { background: #fbf7ec; }
 .stat { background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 16px; }
 .stat .num { font-size: 24px; font-weight: 700; color: #8a5a1f; }
 .stat .lbl { font-size: 12px; color: #6b5a3a; margin-top: 4px; }
+.stat.stock-units-stat { background: linear-gradient(135deg, #e8f5e9, #f4fbf4); border-color: #a5d6a7; }
+.stock-units-stat .num { color: #2e7d32; }
+.stat.stock-value-stat { background: linear-gradient(135deg, #e3f2fd, #f4faff); border-color: #90caf9; }
+.stock-value-stat .num { color: #1565c0; }
+
+.stock-summary-card { border-top: 4px solid #26a69a; }
+.stock-summary-table th { background: #e0f2f1; color: #00695c; }
+.stock-summary-table tbody tr:nth-child(even),
+.stock-inventory-table tbody tr:nth-child(even) { background: #f1f8e9; }
+.stock-summary-table tbody tr:nth-child(odd),
+.stock-inventory-table tbody tr:nth-child(odd) { background: #fffdf8; }
+.stock-type,
+.stock-quantity { display: inline-block; padding: 3px 9px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+.stock-type.warehouse { background: #e3f2fd; color: #1565c0; }
+.stock-type.zone { background: #ede7f6; color: #5e35b1; }
+.stock-type.store { background: #fff3e0; color: #e65100; }
+.stock-quantity { background: #e8eaf6; color: #3949ab; }
+.stock-quantity.available { background: #e8f5e9; color: #2e7d32; }
+.stock-quantity.empty { background: #ffebee; color: #c62828; }
+.stock-value-text { color: #00796b; font-weight: 600; }
+.stock-inventory-table th { background: #e8eaf6; color: #3949ab; }
+.stock-inventory-table tbody tr:hover td { background: #e0f7fa; }
 
 .cart-item { display: flex; gap: 8px; align-items: center; }
 .upi-qr-panel { margin-top: 12px; text-align: center; }
