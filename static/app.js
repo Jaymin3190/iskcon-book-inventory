@@ -18,13 +18,13 @@ async function api(path, opts = {}) {
 }
 
 const TABS = [
-  { id: 'dashboard', label: 'Dashboard', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
-  { id: 'books', label: 'Books', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
-  { id: 'stock', label: 'Stock', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
-  { id: 'transfers', label: 'Transfers', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
-  { id: 'returns', label: 'Returns', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
+  { id: 'dashboard', label: 'Dashboard', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'books', label: 'Books', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'stock', label: 'Stock', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'transfers', label: 'Transfers', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'returns', label: 'Returns', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'pos', label: 'POS Billing', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
-  { id: 'reports', label: 'Reports', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
+  { id: 'reports', label: 'Reports', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'users', label: 'Users', roles: ['super_admin', 'zone_admin'] },
   { id: 'locations', label: 'Locations', roles: ['super_admin'] },
 ];
@@ -62,6 +62,8 @@ function showApp() {
   menuToggle.textContent = 'Menu';
   nav.innerHTML = TABS.filter(t => t.roles.includes(u.role))
     .map(t => `<button data-tab="${t.id}">${t.label}</button>`).join('');
+  const availableTabs = nav.querySelectorAll('button');
+  document.getElementById('appView').classList.toggle('single-tab-nav', availableTabs.length === 1);
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     nav.querySelectorAll('button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
@@ -71,8 +73,10 @@ function showApp() {
     menuToggle.textContent = 'Menu';
     RENDER[state.activeTab]().catch(e => toast(e.message, 'error'));
   }));
-  nav.querySelector('button').classList.add('active');
-  RENDER.dashboard().catch(e => toast(e.message, 'error'));
+  const firstTab = nav.querySelector('button');
+  firstTab.classList.add('active');
+  state.activeTab = firstTab.dataset.tab;
+  RENDER[state.activeTab]().catch(e => toast(e.message, 'error'));
 }
 
 function refreshCurrent() { if (state.user) RENDER[state.activeTab]().catch(e => toast(e.message, 'error')); }

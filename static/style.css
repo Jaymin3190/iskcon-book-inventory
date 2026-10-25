@@ -37,7 +37,7 @@ body {
 .login-brand-name { color: #493516; font-size: 15px; font-weight: 700; letter-spacing: .09em; }
 .login-brand-name small { display: block; margin-top: 3px; color: #8a6d3b; font-size: 9px; letter-spacing: .18em; }
 .login-heading { margin-bottom: 25px; }
-.login-eyebrow { margin-bottom: 7px; color: #6c8a63; font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.login-eyebrow { margin-bottom: 7px; color: #8a5a1f; font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
 .login-card h1 { color: #382b19; font-size: 30px; letter-spacing: -.035em; line-height: 1.2; margin-bottom: 8px; }
 .login-card .sub { color: #786b58; font-size: 14px; line-height: 1.5; }
 .login-card label { display: block; margin: 0 0 7px; color: #51432f; font-size: 12px; font-weight: 600; }
@@ -57,7 +57,7 @@ body {
 }
 .login-card button span { font-size: 18px; line-height: 1; }
 .login-card button:hover { background: linear-gradient(105deg, #714814, #8a5a1f); box-shadow: 0 7px 16px rgba(138, 90, 31, .24); transform: translateY(-1px); }
-.login-card button:focus-visible { outline: 3px solid #6c8a63; outline-offset: 3px; }
+.login-card button:focus-visible { outline: 3px solid #b8732c; outline-offset: 3px; }
 .error { color: #b3261e; font-size: 13px; margin-top: 8px; min-height: 16px; }
 .login-footer { margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee6d8; color: #948873; font-size: 11px; text-align: center; }
 header {
@@ -101,12 +101,12 @@ tr:hover td { background: #fbf7ec; }
 .badge.requested { background: #fde9b8; color: #7a5a00; }
 .badge.approved { background: #d3e7fb; color: #15589c; }
 .badge.dispatched { background: #e3d5f7; color: #5b32a0; }
-.badge.received { background: #cdeccc; color: #1e6b1e; }
+.badge.received { background: #ead9c3; color: #6f481b; }
 .badge.rejected { background: #f7d3d0; color: #8c1d16; }
 .badge.recorded { background: #fde9b8; color: #7a5a00; }
-.badge.processed { background: #cdeccc; color: #1e6b1e; }
+.badge.processed { background: #ead9c3; color: #6f481b; }
 .badge.open { background: #fde9b8; color: #7a5a00; }
-.badge.completed { background: #cdeccc; color: #1e6b1e; }
+.badge.completed { background: #ead9c3; color: #6f481b; }
 
 #modalBackdrop {
   position: fixed; inset: 0; background: rgba(30,20,5,.55);
@@ -131,34 +131,34 @@ tr:hover td { background: #fbf7ec; }
   padding: 12px 18px; border-radius: 8px; font-size: 13px; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.3);
 }
 #toast.error { background: #b3261e; }
-#toast.success { background: #1e6b1e; }
+#toast.success { background: #6f481b; }
 
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
 .stat { background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 16px; }
 .stat .num { font-size: 24px; font-weight: 700; color: #8a5a1f; }
 .stat .lbl { font-size: 12px; color: #6b5a3a; margin-top: 4px; }
-.stat.stock-units-stat { background: linear-gradient(135deg, #e8f5e9, #f4fbf4); border-color: #a5d6a7; }
-.stock-units-stat .num { color: #2e7d32; }
-.stat.stock-value-stat { background: linear-gradient(135deg, #e3f2fd, #f4faff); border-color: #90caf9; }
-.stock-value-stat .num { color: #1565c0; }
+.stat.stock-units-stat { background: linear-gradient(135deg, #f3e8d5, #fffaf1); border-color: #d7b98e; }
+.stock-units-stat .num { color: #7a4e1d; }
+.stat.stock-value-stat { background: linear-gradient(135deg, #ead9c3, #fbf5ec); border-color: #c9a77b; }
+.stock-value-stat .num { color: #6f481b; }
 
-.stock-summary-card { border-top: 4px solid #26a69a; }
-.stock-summary-table th { background: #e0f2f1; color: #00695c; }
+.stock-summary-card { border-top: 4px solid #9a6a32; }
+.stock-summary-table th { background: #eee0cc; color: #68451f; }
 .stock-summary-table tbody tr:nth-child(even),
-.stock-inventory-table tbody tr:nth-child(even) { background: #f1f8e9; }
+.stock-inventory-table tbody tr:nth-child(even) { background: #f7f0e5; }
 .stock-summary-table tbody tr:nth-child(odd),
 .stock-inventory-table tbody tr:nth-child(odd) { background: #fffdf8; }
 .stock-type,
 .stock-quantity { display: inline-block; padding: 3px 9px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-.stock-type.warehouse { background: #e3f2fd; color: #1565c0; }
-.stock-type.zone { background: #ede7f6; color: #5e35b1; }
-.stock-type.store { background: #fff3e0; color: #e65100; }
-.stock-quantity { background: #e8eaf6; color: #3949ab; }
-.stock-quantity.available { background: #e8f5e9; color: #2e7d32; }
+.stock-type.warehouse { background: #ead9c3; color: #6f481b; }
+.stock-type.zone { background: #f3e8d5; color: #80551f; }
+.stock-type.store { background: #f3e8d5; color: #80551f; }
+.stock-quantity { background: #eee4d5; color: #63451f; }
+.stock-quantity.available { background: #f3e8d5; color: #754c1f; }
 .stock-quantity.empty { background: #ffebee; color: #c62828; }
-.stock-value-text { color: #00796b; font-weight: 600; }
-.stock-inventory-table th { background: #e8eaf6; color: #3949ab; }
-.stock-inventory-table tbody tr:hover td { background: #e0f7fa; }
+.stock-value-text { color: #75501f; font-weight: 600; }
+.stock-inventory-table th { background: #eee0cc; color: #68451f; }
+.stock-inventory-table tbody tr:hover td { background: #f2e4d1; }
 
 .cart-item { display: flex; gap: 8px; align-items: center; }
 .upi-qr-panel { margin-top: 12px; text-align: center; }
@@ -200,6 +200,8 @@ td .action, td .danger { margin-bottom: 2px; }
     padding: 6px 12px;
   }
   nav#tabs.mobile-menu-open { display: flex; }
+  #appView.single-tab-nav #mobileMenuToggle { display: none; }
+  #appView.single-tab-nav nav#tabs { display: flex; }
   nav#tabs button {
     width: 100%;
     padding: 10px 12px;
