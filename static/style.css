@@ -135,6 +135,19 @@ tr.hl td { background: #fff3cd !important; }
 td .action, td .danger { margin-bottom: 2px; }
 
 @media (max-width: 600px) {
+  header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .user-box {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .user-box span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  button.ghost { flex-shrink: 0; }
   nav#tabs {
     flex-direction: column;
     align-items: stretch;
