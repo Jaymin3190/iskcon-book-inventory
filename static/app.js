@@ -56,12 +56,19 @@ function showApp() {
   const loc = u.location_name || u.zone_name || 'Global';
   document.getElementById('userInfo').textContent = `${u.name} (${u.role}) — ${loc}`;
   const nav = document.getElementById('tabs');
+  const menuToggle = document.getElementById('mobileMenuToggle');
+  nav.classList.remove('mobile-menu-open');
+  menuToggle.setAttribute('aria-expanded', 'false');
+  menuToggle.textContent = 'Menu';
   nav.innerHTML = TABS.filter(t => t.roles.includes(u.role))
     .map(t => `<button data-tab="${t.id}">${t.label}</button>`).join('');
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     nav.querySelectorAll('button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     state.activeTab = b.dataset.tab;
+    nav.classList.remove('mobile-menu-open');
+    menuToggle.setAttribute('aria-expanded', 'false');
+    menuToggle.textContent = 'Menu';
     RENDER[state.activeTab]().catch(e => toast(e.message, 'error'));
   }));
   nav.querySelector('button').classList.add('active');
@@ -69,6 +76,14 @@ function showApp() {
 }
 
 function refreshCurrent() { if (state.user) RENDER[state.activeTab]().catch(e => toast(e.message, 'error')); }
+
+document.getElementById('mobileMenuToggle').addEventListener('click', () => {
+  const nav = document.getElementById('tabs');
+  const isOpen = nav.classList.toggle('mobile-menu-open');
+  const menuToggle = document.getElementById('mobileMenuToggle');
+  menuToggle.setAttribute('aria-expanded', String(isOpen));
+  menuToggle.textContent = isOpen ? 'Close menu' : 'Menu';
+});
 
 function openModal(html) {
   document.getElementById('modalBox').innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;

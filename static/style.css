@@ -68,6 +68,7 @@ header {
 .user-box { display: flex; align-items: center; gap: 12px; font-size: 13px; }
 button.ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.5); border-radius: 5px; padding: 5px 12px; cursor: pointer; }
 button.ghost:hover { background: rgba(255,255,255,.15); }
+#mobileMenuToggle { display: none; }
 
 nav#tabs { display: flex; gap: 4px; background: #fffdf8; border-bottom: 1px solid #e3d6ba; padding: 0 12px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
 nav#tabs button {
@@ -185,16 +186,20 @@ td .action, td .danger { margin-bottom: 2px; }
   }
   .user-box span {
     min-width: 0;
+    flex: 1;
     overflow-wrap: anywhere;
   }
   button.ghost { flex-shrink: 0; }
+  #mobileMenuToggle { display: inline-flex; }
   nav#tabs {
+    display: none;
     flex-direction: column;
     align-items: stretch;
     gap: 0;
     overflow: visible;
     padding: 6px 12px;
   }
+  nav#tabs.mobile-menu-open { display: flex; }
   nav#tabs button {
     width: 100%;
     padding: 10px 12px;
