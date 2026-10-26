@@ -82,6 +82,16 @@ zone_names = [l["name"] for l in all_locs if l["type"] == "zone"]
 check("zones named correctly", set(zone_names) == {"Temple Zone", "Niradhar Ashram", "Gokul Nagar", "Patel Park", "Base Students", "Reliance Group"})
 _, zone_stock = call("GET", "/api/stock?location_id=2", token=super_t)
 check("zones start at zero", all(s["qty"] == 0 for s in zone_stock))
+_, stock_summary = call("GET", "/api/reports/stock-summary", token=super_t)
+check("super admin can view total stock across locations", sum(s["total_units"] for s in stock_summary) == 100)
+check("stock summary identifies warehouse availability", sum(
+    s["total_units"] for s in stock_summary if s["type"] == "warehouse" and s["parent_id"] is None
+) == 100)
+
+code, admin_invoice = call("POST", "/api/pos/invoices", token=super_t, body={
+    "payment_mode": "cash", "items": [{"barcode": "9780892139523", "qty": 1}],
+})
+check("super admin can bill without an assigned location", code == 200 and admin_invoice["invoice_number"].startswith("INV-TEMPLE-"), admin_invoice)
 
 # --- transfer: zone leader self-service from temple ---
 code, tr = call("POST", "/api/stock/transfers", token=zone_t, body={
@@ -112,6 +122,20 @@ check("zone leader receives", code == 200)
 _, zs = call("GET", "/api/stock?location_id=2", token=super_t)
 check("zone stock increased after receive", qty(zs, 1, 2) == 5 and qty(zs, 5, 2) == 10 and qty(zs, 7, 2) == 4)
 
+code, _ = call("POST", "/api/stock/transfers", token=super_t, body={
+    "from_location_id": 2, "to_location_id": 3, "items": [{"book_id": 1, "qty": 1}],
+})
+check("stock cannot be issued from a zone", code == 400)
+code, _ = call("POST", "/api/stock/transfers", token=super_t, body={
+    "from_location_id": 1, "to_location_id": 3, "items": [{"book_id": 5, "qty": 1}],
+})
+check("issue is blocked when warehouse stock is empty", code == 400)
+code, _ = call("POST", "/api/stock/transfers", token=super_t, body={
+    "from_location_id": 1, "to_location_id": 3,
+    "items": [{"book_id": 1, "qty": 3}, {"book_id": 1, "qty": 3}],
+})
+check("duplicate transfer lines cannot exceed warehouse stock", code == 400)
+
 # --- POS billing at temple ---
 code, inv = call("POST", "/api/pos/invoices", token=temple_t, body={
     "location_id": None, "customer_name": None, "customer_phone": None,
@@ -128,6 +152,10 @@ code, _ = call("POST", "/api/pos/invoices", token=temple_t, body={
     "items": [{"barcode": "9780892131343", "qty": 9999}],
 })
 check("oversell rejected", code == 400)
+code, _ = call("POST", "/api/pos/invoices", token=temple_t, body={
+    "items": [{"barcode": "9780892131343", "qty": 3}, {"barcode": "9780892131343", "qty": 3}],
+})
+check("duplicate invoice lines cannot oversell available stock", code == 400)
 
 code, _ = call("POST", "/api/pos/invoices", token=dist_t, body={
     "location_id": 1, "payment_mode": "cash",

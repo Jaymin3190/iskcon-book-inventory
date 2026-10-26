@@ -147,12 +147,15 @@ async function dashboard() {
     api('/api/reports/stock-summary'), api('/api/reports/sales'), api('/api/reports/transfers'),
   ]);
   const totalUnits = stock.reduce((a, s) => a + (s.total_units || 0), 0);
+  const warehouseUnits = stock.filter(s => s.type === 'warehouse' && s.parent_id == null)
+    .reduce((a, s) => a + (s.total_units || 0), 0);
   const totalValue = stock.reduce((a, s) => a + (s.stock_value || 0), 0);
   const revenue = sales.reduce((a, s) => a + (s.revenue || 0), 0);
   const open = tf.filter(t => t.status === 'requested').reduce((a, t) => a + t.n, 0);
   document.getElementById('content').innerHTML = `
     <div class="stats">
-      <div class="stat stock-units-stat"><div class="num">${totalUnits}</div><div class="lbl">Units on hand</div></div>
+      <div class="stat stock-units-stat"><div class="num">${totalUnits}</div><div class="lbl">Total stock (all locations)</div></div>
+      <div class="stat warehouse-units-stat"><div class="num">${warehouseUnits}</div><div class="lbl">Warehouse stock available to issue</div></div>
       <div class="stat stock-value-stat"><div class="num">&#8377;${totalValue.toFixed(0)}</div><div class="lbl">Stock value</div></div>
       <div class="stat"><div class="num">&#8377;${revenue.toFixed(0)}</div><div class="lbl">Sales revenue</div></div>
       <div class="stat"><div class="num">${open}</div><div class="lbl">Open transfer requests</div></div>
@@ -426,11 +429,17 @@ let trItems = [];
 async function transferForm() {
   trItems = [{ book_id: '', qty: 1 }];
   const [locs, books] = await Promise.all([api('/api/locations'), api('/api/books')]);
+  const sources = locs.filter(l => l.type === 'warehouse' && l.parent_id == null);
+  const destinations = locs.filter(l => l.type !== 'warehouse');
+  if (!sources.length || !destinations.length) {
+    toast('A root warehouse and at least one zone or store are required for stock issue', 'error');
+    return;
+  }
   state.books = books;
   openModal(`<h3>Request stock transfer</h3>
     <div class="form-grid">
-      <div class="form-row"><label>From location</label><select id="tfFrom">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
-      <div class="form-row"><label>To location</label><select id="tfTo">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>From warehouse</label><select id="tfFrom">${sources.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>To zone or store</label><select id="tfTo">${destinations.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
     </div>
     <div class="form-row"><label>Note</label><input id="tfNote"></div>
     ${scanBoxHTML('Scan barcode to add book to transfer')}
@@ -630,10 +639,16 @@ async function pos() {
   const [books, locs] = await Promise.all([api('/api/books'), api('/api/locations')]);
   state.books = books;
   state.cart = [];
-  const defLoc = state.user.location_id || state.user.zone_id;
   const isDistributor = state.user.role === 'distributor';
+  const defaultWarehouse = locs.find(l => l.type === 'warehouse' && l.parent_id == null);
+  const defLoc = isDistributor
+    ? state.user.zone_id
+    : state.user.location_id || state.user.zone_id ||
+      (state.user.role === 'super_admin' ? defaultWarehouse?.id || locs[0]?.id : null);
   const billingLocation = locs.find(l => l.id === (isDistributor ? state.user.zone_id : defLoc));
-  if (!billingLocation) { toast('No assigned billing location is available', 'error'); return; }
+  if (!billingLocation && state.user.role !== 'super_admin') {
+    toast('No assigned billing location is available', 'error'); return;
+  }
   document.getElementById('content').innerHTML = `
     <div class="card">
       <h2>Quick-scan billing</h2>

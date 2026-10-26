@@ -252,9 +252,35 @@ def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_
         raise HTTPException(400, "At least one item is required")
     if not can_view(db, user, data.from_location_id) or not can_view(db, user, data.to_location_id):
         raise HTTPException(403, "Forbidden")
+    source = db.execute(
+        "SELECT type, parent_id FROM locations WHERE id = ?",
+        (data.from_location_id,),
+    ).fetchone()
+    destination = db.execute(
+        "SELECT type FROM locations WHERE id = ?",
+        (data.to_location_id,),
+    ).fetchone()
+    if not source or source["type"] != "warehouse" or source["parent_id"] is not None:
+        raise HTTPException(400, "Stock can only be issued from the root warehouse")
+    if not destination or destination["type"] == "warehouse":
+        raise HTTPException(400, "Choose a zone or store as the transfer destination")
     for it in data.items:
         if it.qty <= 0:
             raise HTTPException(400, "Quantities must be positive")
+
+    requested_qty = {}
+    for it in data.items:
+        requested_qty[it.book_id] = requested_qty.get(it.book_id, 0) + it.qty
+    shortages = []
+    for book_id, qty in requested_qty.items():
+        book = db.execute("SELECT title FROM books WHERE id = ?", (book_id,)).fetchone()
+        if not book:
+            raise HTTPException(404, f"Book not found: {book_id}")
+        if not check_available(db, book_id, data.from_location_id, qty):
+            shortages.append(f"{book['title']} (need {qty})")
+    if shortages:
+        raise HTTPException(400, "Insufficient warehouse stock to issue: " + ", ".join(shortages))
+
     num = f"TRF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
     cur = db.execute(
         """INSERT INTO transfers (request_number, from_location_id, to_location_id, status, requested_by, note)
@@ -262,10 +288,10 @@ def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_
         (num, data.from_location_id, data.to_location_id, user["id"], data.note),
     )
     tid = cur.lastrowid
-    for it in data.items:
+    for book_id, qty in requested_qty.items():
         db.execute(
             "INSERT INTO transfer_items (transfer_id, book_id, qty) VALUES (?,?,?)",
-            (tid, it.book_id, it.qty),
+            (tid, book_id, qty),
         )
     db.commit()
     log_audit(db, user["id"], "TRANSFER_REQUEST", "transfers", tid, num, user["username"])
@@ -314,16 +340,25 @@ def dispatch_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require
         raise HTTPException(400, f"Cannot dispatch transfer in status '{t['status']}'")
     if user["role"] != "super_admin" and not can_view(db, user, t["from_location_id"]):
         raise HTTPException(403, "Forbidden")
+    source = db.execute(
+        "SELECT type, parent_id FROM locations WHERE id = ?",
+        (t["from_location_id"],),
+    ).fetchone()
+    if not source or source["type"] != "warehouse" or source["parent_id"] is not None:
+        raise HTTPException(400, "Stock can only be issued from the root warehouse")
     items = db.execute("SELECT * FROM transfer_items WHERE transfer_id = ?", (transfer_id,)).fetchall()
     shortages = []
+    requested_qty = {}
     for it in items:
-        if not check_available(db, it["book_id"], t["from_location_id"], it["qty"]):
-            book = db.execute("SELECT title FROM books WHERE id = ?", (it["book_id"],)).fetchone()
-            shortages.append(f"{book['title']} (need {it['qty']})")
+        requested_qty[it["book_id"]] = requested_qty.get(it["book_id"], 0) + it["qty"]
+    for book_id, qty in requested_qty.items():
+        if not check_available(db, book_id, t["from_location_id"], qty):
+            book = db.execute("SELECT title FROM books WHERE id = ?", (book_id,)).fetchone()
+            shortages.append(f"{book['title']} (need {qty})")
     if shortages:
-        raise HTTPException(400, "Insufficient stock to dispatch: " + ", ".join(shortages))
-    for it in items:
-        move_stock(db, it["book_id"], t["from_location_id"], -it["qty"], "TRANSFER_OUT", "transfers", transfer_id, user["id"], t["request_number"])
+        raise HTTPException(400, "Insufficient warehouse stock to issue: " + ", ".join(shortages))
+    for book_id, qty in requested_qty.items():
+        move_stock(db, book_id, t["from_location_id"], -qty, "TRANSFER_OUT", "transfers", transfer_id, user["id"], t["request_number"])
     db.execute(
         "UPDATE transfers SET status = 'dispatched', dispatched_by = ?, dispatched_at = datetime('now') WHERE id = ?",
         (user["id"], transfer_id),

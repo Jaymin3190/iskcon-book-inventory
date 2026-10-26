@@ -137,7 +137,7 @@ tr:hover td { background: #fbf7ec; }
 #toast.error { background: #b3261e; }
 #toast.success { background: #6f481b; }
 
-.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
 .stat { background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 16px; }
 .stat .num { font-size: 24px; font-weight: 700; color: #8a5a1f; }
 .stat .lbl { font-size: 12px; color: #6b5a3a; margin-top: 4px; }
@@ -145,6 +145,8 @@ tr:hover td { background: #fbf7ec; }
 .stock-units-stat .num { color: #7a4e1d; }
 .stat.stock-value-stat { background: linear-gradient(135deg, #ead9c3, #fbf5ec); border-color: #c9a77b; }
 .stock-value-stat .num { color: #6f481b; }
+.stat.warehouse-units-stat { background: #f4ead9; border-color: #dcc39f; }
+.warehouse-units-stat .num { color: #76501f; }
 
 .stock-summary-card { border-top: 4px solid #9a6a32; }
 .stock-summary-table { table-layout: fixed; }
@@ -292,7 +294,7 @@ td .action, td .danger { margin-bottom: 2px; }
 }
 
 @media (min-width: 601px) and (max-width: 1200px) {
-  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (min-width: 601px) and (max-width: 900px) {

@@ -57,20 +57,31 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
             raise HTTPException(403, "Distributors can only bill against their assigned zone")
     else:
         loc_id = data.location_id or user["location_id"] or user["zone_id"]
+        if not loc_id and user["role"] == "super_admin":
+            warehouse = db.execute(
+                "SELECT id FROM locations WHERE type = 'warehouse' AND parent_id IS NULL ORDER BY id LIMIT 1"
+            ).fetchone()
+            loc_id = warehouse["id"] if warehouse else None
     if not loc_id or loc_id not in location_ids(db, user):
         raise HTTPException(400, "You have no billing location")
     loc = db.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
 
-    resolved = []
+    resolved_by_book = {}
     for it in data.items:
         if it.qty <= 0:
             raise HTTPException(400, "Quantities must be positive")
         book = db.execute("SELECT * FROM books WHERE barcode = ? OR isbn = ?", (it.barcode, it.barcode)).fetchone()
         if not book:
             raise HTTPException(400, f"Unknown barcode: {it.barcode}")
-        if not check_available(db, book["id"], loc_id, it.qty):
+        if book["id"] in resolved_by_book:
+            existing_book, existing_qty = resolved_by_book[book["id"]]
+            resolved_by_book[book["id"]] = (existing_book, existing_qty + it.qty)
+        else:
+            resolved_by_book[book["id"]] = (book, it.qty)
+    resolved = list(resolved_by_book.values())
+    for book, qty in resolved:
+        if not check_available(db, book["id"], loc_id, qty):
             raise HTTPException(400, f"Insufficient stock for '{book['title']}' at {loc['name']}")
-        resolved.append((book, it.qty))
 
     subtotal = sum(b["price"] * q for b, q in resolved)
     discount = min(data.discount, subtotal)
