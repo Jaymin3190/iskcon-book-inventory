@@ -53,6 +53,33 @@ def sales_by_book(frm: str = None, to: str = None, db=Depends(get_db), user=Depe
     return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
+@router.get("/api/reports/distributor-sales")
+def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+    ids = location_ids(db, user)
+    sql = """SELECT i.created_at AS sold_at, i.invoice_number,
+                    u.name AS distributor_name, u.username AS distributor_username,
+                    l.name AS location_name, b.title AS book_title, b.barcode,
+                    ii.qty, i.payment_mode, ii.line_total AS amount
+             FROM invoices i
+             JOIN users u ON u.id = i.cashier_id AND u.role = 'distributor'
+             JOIN locations l ON l.id = i.location_id
+             JOIN invoice_items ii ON ii.invoice_id = i.id
+             JOIN books b ON b.id = ii.book_id
+             WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
+    params = list(ids)
+    if user["role"] == "zone_admin":
+        sql += " AND u.zone_id = ?"
+        params.append(user["zone_id"])
+    if frm:
+        sql += " AND i.created_at >= ?"
+        params.append(frm)
+    if to:
+        sql += " AND i.created_at <= ?"
+        params.append(to + " 23:59:59")
+    sql += " ORDER BY i.created_at DESC, i.id DESC, ii.id"
+    return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
 @router.get("/api/reports/stock-summary")
 def stock_summary(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     ids = location_ids(db, user)

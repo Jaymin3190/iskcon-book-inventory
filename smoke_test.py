@@ -135,6 +135,22 @@ code, led = call("POST", "/api/pos/invoices", token=dist_t, body={
 })
 check("distributor ledger billing at zone", code == 200 and led["total"] == 400.0, led)
 
+code, zone_sales = call("GET", "/api/reports/distributor-sales", token=zone_t)
+check("zone leader sees distributor book and payment sales", code == 200 and any(
+    row["invoice_number"] == led["invoice_number"] and row["distributor_name"] == "Distributor"
+    and row["book_title"] == "Raja-vidya" and row["payment_mode"] == "ledger" and row["qty"] == 4
+    for row in zone_sales
+), zone_sales)
+code, admin_sales = call("GET", "/api/reports/distributor-sales", token=super_t)
+check("super admin sees distributor sales", code == 200 and any(row["invoice_number"] == led["invoice_number"] for row in admin_sales))
+other_zone_t = login("leader-niradhar-ashram", "zone123")
+code, other_zone_sales = call("GET", "/api/reports/distributor-sales", token=other_zone_t)
+check("zone report excludes another zone's distributor sales", code == 200 and all(
+    row["invoice_number"] != led["invoice_number"] for row in other_zone_sales
+))
+code, _ = call("GET", "/api/reports/distributor-sales", token=dist_t)
+check("distributor sales report restricted to managers", code == 403)
+
 _, inv_detail = call("GET", f"/api/pos/invoices/{inv['invoice_id']}", token=temple_t)
 check("invoice detail has items", len(inv_detail["items"]) == 1)
 

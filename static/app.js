@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [] };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [] };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -809,18 +809,33 @@ async function invoiceDelete(invoiceId) {
 }
 
 async function reports() {
-  const [sales, byBook, stockSum, tf] = await Promise.all([
+  const canViewDistributorSales = ['super_admin', 'zone_admin'].includes(state.user.role);
+  const [sales, byBook, stockSum, tf, distributorSales] = await Promise.all([
     api('/api/reports/sales'), api('/api/reports/sales-by-book'), api('/api/reports/stock-summary'), api('/api/reports/transfers'),
+    canViewDistributorSales ? api('/api/reports/distributor-sales') : Promise.resolve([]),
   ]);
+  state.distributorSales = distributorSales;
   let auditHtml = '';
-  if (['super_admin', 'zone_admin'].includes(state.user.role)) {
+  let distributorSalesHtml = '';
+  if (canViewDistributorSales) {
     const audit = await api('/api/audit?limit=50');
     auditHtml = `<div class="card"><h2>Audit trail</h2><table>
       <tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Details</th></tr>
       ${audit.map(a => `<tr><td>${esc(a.created_at)}</td><td>${esc(a.username || '')}</td><td>${esc(a.action)}</td><td>${esc(a.entity || '')}${a.entity_id ? ' #' + a.entity_id : ''}</td><td>${esc(a.details || '')}</td></tr>`).join('')}
     </table></div>`;
+    distributorSalesHtml = `<div class="card">
+      <h2>Distributor sales by bill</h2>
+      <div class="toolbar">
+        <label>From <input id="distSalesFrom" type="date"></label>
+        <label>To <input id="distSalesTo" type="date"></label>
+        <button class="primary" onclick="loadDistributorSales()">Load report</button>
+        <button class="action" onclick="exportDistributorSales()">Export CSV</button>
+      </div>
+      <div id="distributorSalesTable">${renderDistributorSalesRows(distributorSales)}</div>
+    </div>`;
   }
   document.getElementById('content').innerHTML = `
+    ${distributorSalesHtml}
     <div class="card"><h2>Sales by location</h2>
       <table><tr><th>Location</th><th>Invoices</th><th>Revenue</th></tr>
         ${sales.map(s => `<tr><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.revenue.toFixed(2)}</td></tr>`).join('')}
@@ -838,6 +853,49 @@ async function reports() {
         ${tf.map(t => `<tr><td>${esc(t.status)}</td><td>${t.n}</td></tr>`).join('')}
       </table></div>
     ${auditHtml}`;
+}
+
+function renderDistributorSalesRows(rows) {
+  if (!rows.length) return '<p class="hint">No distributor sales found for this period.</p>';
+  return `<table><tr><th>Date</th><th>Bill</th><th>Distributor</th><th>Location</th><th>Book</th><th>Qty</th><th>Payment mode</th><th>Amount</th></tr>
+      ${rows.map(s => `<tr>
+        <td>${esc(s.sold_at)}</td><td>${esc(s.invoice_number)}</td>
+        <td>${esc(s.distributor_name)} (${esc(s.distributor_username)})</td>
+        <td>${esc(s.location_name)}</td><td>${esc(s.book_title)}</td><td>${s.qty}</td>
+        <td>${esc(s.payment_mode.toUpperCase())}</td><td>&#8377;${Number(s.amount).toFixed(2)}</td>
+      </tr>`).join('')}</table>`;
+}
+
+async function loadDistributorSales() {
+  const from = document.getElementById('distSalesFrom').value;
+  const to = document.getElementById('distSalesTo').value;
+  if (from && to && from > to) { toast('From date must not be after To date', 'error'); return; }
+  const params = new URLSearchParams();
+  if (from) params.set('frm', from);
+  if (to) params.set('to', to);
+  const query = params.toString();
+  state.distributorSales = await api('/api/reports/distributor-sales' + (query ? '?' + query : ''));
+  document.getElementById('distributorSalesTable').innerHTML = renderDistributorSalesRows(state.distributorSales);
+}
+
+function exportDistributorSales() {
+  if (!state.distributorSales.length) { toast('No distributor sales to export', 'error'); return; }
+  const columns = [
+      ['sold_at', 'Date'], ['invoice_number', 'Bill'], ['distributor_name', 'Distributor'],
+      ['distributor_username', 'Username'], ['location_name', 'Location'], ['book_title', 'Book'],
+      ['barcode', 'Barcode'], ['qty', 'Quantity'], ['payment_mode', 'Payment mode'], ['amount', 'Amount'],
+  ];
+  const csv = [columns.map(([, label]) => label), ...state.distributorSales.map(row => columns.map(([key]) => row[key] ?? ''))]
+      .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+  const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'distributor-sales.csv';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 const ROLE_LABELS = { super_admin: 'Super Admin', zone_admin: 'Zone Admin', distributor: 'Distributor', temple: 'Temple / Store' };
