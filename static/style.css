@@ -167,6 +167,9 @@ tr:hover td { background: #fbf7ec; }
 .kbd { background: #eee4cf; border: 1px solid #d8c9a8; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 
 #scanBox input { font-family: Consolas, monospace; }
+#scanCam { display: block; width: 100%; max-height: 50vh; margin-top: 12px; border-radius: 8px; background: #211b12; object-fit: contain; }
+#scanCam[hidden] { display: none; }
+.billing-location { padding: 8px 10px; color: #6b5a3a; font-size: 13px; }
 tr.hl td { background: #fff3cd !important; }
 .hint { color: #8a6d3b; font-size: 12px; margin-bottom: 10px; }
 td .action, td .danger { margin-bottom: 2px; }

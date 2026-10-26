@@ -129,6 +129,12 @@ code, _ = call("POST", "/api/pos/invoices", token=temple_t, body={
 })
 check("oversell rejected", code == 400)
 
+code, _ = call("POST", "/api/pos/invoices", token=dist_t, body={
+    "location_id": 1, "payment_mode": "cash",
+    "items": [{"barcode": "9780892131565", "qty": 1}],
+})
+check("distributor cannot bill from warehouse", code == 403)
+
 code, led = call("POST", "/api/pos/invoices", token=dist_t, body={
     "customer_name": "Temple Zone", "payment_mode": "ledger",
     "items": [{"barcode": "9780892131565", "qty": 4}],
@@ -274,6 +280,22 @@ code, _ = call("POST", "/api/stock/adjust", token=temple_t, body={
     "book_id": 1, "location_id": 1, "qty": -999,
 })
 check("stock adjustment prevents negative inventory", code == 400)
+code, _ = call("POST", "/api/stock/adjust", token=temple_t, body={
+    "book_id": 1, "location_id": 2, "qty": 1,
+})
+check("temple warehouse staff cannot adjust zone stock", code == 403)
+code, _ = call("POST", "/api/stock/adjust", token=zone_t, body={
+    "book_id": 1, "location_id": 2, "qty": 1,
+})
+check("zone leader cannot directly add zone stock", code == 403)
+code, _ = call("POST", "/api/stock/adjust", token=dist_t, body={
+    "book_id": 1, "location_id": 1, "qty": 1,
+})
+check("distributor cannot directly adjust warehouse stock", code == 403)
+code, _ = call("POST", "/api/stock/adjust", token=super_t, body={
+    "book_id": 1, "location_id": 2, "qty": 1,
+})
+check("admin can only manually adjust warehouse stock", code == 403)
 code, ledger = call("GET", "/api/stock/ledger?location_id=1&book_id=1", token=temple_t)
 check("stock ledger filters by location and book", code == 200 and len(ledger) >= 1)
 code, open_count = call("POST", "/api/stock/counts", token=temple_t, body={"location_id": 1})

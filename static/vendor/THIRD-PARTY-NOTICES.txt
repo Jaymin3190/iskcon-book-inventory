@@ -1,0 +1,9 @@
+Camera barcode scanning uses these locally served libraries:
+
+- @zxing/library 0.21.3, licensed under Apache License 2.0.
+  See LICENSE-zxing-library.txt.
+- @zxing/browser 0.1.5, licensed under the MIT License.
+  See LICENSE-zxing-browser.txt.
+
+Source: https://github.com/zxing-js/library
+Source: https://github.com/zxing-js/browser

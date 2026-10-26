@@ -47,6 +47,10 @@ so code updates do not overwrite it.
 5. Set the Web tab's source code and working directory to
    `/home/<username>/iskcon-book-inventory`, then reload the web app.
 
+Camera barcode scanning uses the mobile browser's camera and requires HTTPS
+and camera permission. The scanner processes frames in the browser; camera
+images are not uploaded to the app.
+
 The app creates the schema and seeds demo data when it first starts. The seed
 step only runs when there are no users. Change or remove the seeded demo
 accounts immediately after first login. Never delete the separate data

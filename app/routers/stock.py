@@ -66,11 +66,19 @@ class StockAdjustIn(BaseModel):
 
 
 @router.post("/adjust")
-def adjust_stock(data: StockAdjustIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def adjust_stock(data: StockAdjustIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "temple"))):
     if data.qty == 0:
         raise HTTPException(400, "Quantity must not be zero")
     if data.location_id not in location_ids(db, user):
         raise HTTPException(403, "Forbidden")
+    location = db.execute(
+        "SELECT type, parent_id FROM locations WHERE id = ?",
+        (data.location_id,),
+    ).fetchone()
+    if not location or location["type"] != "warehouse" or location["parent_id"] is not None:
+        raise HTTPException(403, "Manual stock adjustments are only allowed at the warehouse; use a transfer to assign stock to a zone")
+    if user["role"] == "temple" and user["location_id"] != data.location_id:
+        raise HTTPException(403, "You can only adjust stock at your assigned warehouse")
     book = db.execute("SELECT * FROM books WHERE id = ?", (data.book_id,)).fetchone()
     if not book:
         raise HTTPException(404, "Book not found")

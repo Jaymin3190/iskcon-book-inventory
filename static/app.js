@@ -44,6 +44,7 @@ async function login() {
 }
 
 function logout() {
+  if (cameraStarting || scanStream || scanControls) stopCam();
   state.token = ''; state.user = null; localStorage.removeItem('tk');
   document.getElementById('appView').hidden = true;
   document.getElementById('loginView').hidden = false;
@@ -68,6 +69,7 @@ function showApp() {
     nav.querySelectorAll('button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     state.activeTab = b.dataset.tab;
+    if (cameraStarting || scanStream || scanControls) stopCam();
     nav.classList.remove('mobile-menu-open');
     menuToggle.setAttribute('aria-expanded', 'false');
     menuToggle.textContent = 'Menu';
@@ -259,6 +261,9 @@ let stockLocFilter = '';
 async function stock() {
   const locs = await api('/api/locations');
   const rows = await api('/api/stock' + (stockLocFilter ? '?location_id=' + stockLocFilter : ''));
+  const role = state.user.role;
+  const adjustmentWarehouse = locs.find(l => l.type === 'warehouse' &&
+    (role === 'super_admin' || (role === 'temple' && l.id === state.user.location_id)));
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar">
@@ -266,24 +271,29 @@ async function stock() {
           <option value="">All locations</option>
           ${locs.map(l => `<option value="${l.id}" ${String(l.id) === stockLocFilter ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
         </select>
-        <button class="primary" onclick="stockAdjustModal()">+ Add / adjust stock</button>
+        ${adjustmentWarehouse ? '<button class="primary" onclick="stockAdjustModal()">+ Receive stock at warehouse</button>' : ''}
         <button class="action" onclick="stockCountModal()">Start stock count</button>
         <button class="action" onclick="showLedger()">Stock ledger</button>
       </div>
       <table class="stock-inventory-table">
         <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th><th>Actions</th></tr>
-        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td><td><button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button><button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button></td></tr>`).join('') || '<tr><td colspan="8" class="hint">No stock rows found.</td></tr>'}
+        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td><td>${adjustmentWarehouse && r.location_id === adjustmentWarehouse.id ? `<button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button>` : ''}<button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button></td></tr>`).join('') || '<tr><td colspan="8" class="hint">No stock rows found.</td></tr>'}
       </table>
     </div>`;
   pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row');
 }
 
 async function stockAdjustModal(bookId = null, locationId = null) {
-  const [locs, books] = await Promise.all([api('/api/locations'), api('/api/books')]);
+  const canAdjust = ['super_admin', 'temple'].includes(state.user.role);
+  if (!canAdjust) { toast('Only warehouse staff can adjust stock', 'error'); return; }
+  const [locs, books] = await Promise.all([api('/api/locations?type=warehouse'), api('/api/books')]);
+  const allowedLocations = locs.filter(l => l.type === 'warehouse' && l.parent_id == null &&
+    (state.user.role === 'super_admin' || l.id === state.user.location_id));
+  if (!allowedLocations.length) { toast('No assigned warehouse is available for stock entry', 'error'); return; }
   state.books = books;
-  openModal(`<h3>Add / adjust stock</h3>
+  openModal(`<h3>Receive / adjust warehouse stock</h3>
     <div class="form-grid">
-      <div class="form-row"><label>Location</label><select id="saLoc">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Warehouse</label><select id="saLoc">${allowedLocations.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
       <div class="form-row"><label>Book</label><select id="saBook"><option value="">Select book</option>${books.map(b => `<option value="${b.id}">${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}</select></div>
       <div class="form-row"><label>Direction</label><select id="saDir"><option value="in">Stock in (+)</option><option value="out">Stock out (-)</option></select></div>
       <div class="form-row"><label>Quantity</label><input id="saQty" type="number" min="1" value="1"></div>
@@ -621,15 +631,16 @@ async function pos() {
   state.books = books;
   state.cart = [];
   const defLoc = state.user.location_id || state.user.zone_id;
+  const isDistributor = state.user.role === 'distributor';
+  const billingLocation = locs.find(l => l.id === (isDistributor ? state.user.zone_id : defLoc));
+  if (!billingLocation) { toast('No assigned billing location is available', 'error'); return; }
   document.getElementById('content').innerHTML = `
     <div class="card">
       <h2>Quick-scan billing</h2>
       <div class="toolbar" id="scanBox">
-        <select id="billLoc" style="max-width:220px">
-          ${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
-        </select>
+        ${isDistributor ? `<span class="billing-location">Billing zone: <strong>${esc(billingLocation.name)}</strong></span>` : `<select id="billLoc" style="max-width:220px">${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`}
         <input id="scanInput" placeholder="Scan / type barcode or ISBN, press Enter" style="flex:1" onkeydown="if(event.key==='Enter')doScan(this.value)">
-        <button class="primary" onclick="cameraScan()">Camera scan</button>
+        <button id="cameraToggle" class="primary" onclick="cameraScan()">Camera scan</button>
         <button class="action" onclick="invoiceList()">Invoice history</button>
         <select id="manualBook" onchange="posAddBySelect(this.value)" style="max-width:260px">
           <option value="">&mdash; manual search &mdash;</option>
@@ -659,7 +670,7 @@ async function pos() {
         <button class="primary" onclick="checkout()">Checkout</button>
       </div>
     </div>
-    <video id="scanCam" hidden playsinline></video>`;
+    <video id="scanCam" hidden playsinline muted></video>`;
   renderCart();
   toggleUpiQr();
   document.getElementById('scanInput').focus();
@@ -719,31 +730,121 @@ function renderCart() {
   document.getElementById('cartTotal').innerHTML = `&#8377;${total.toFixed(2)}`;
 }
 
-let scanStream = null, detectLoop = null;
+let scanStream = null, detectLoop = null, scanControls = null, zxingLoadPromise = null;
+let cameraScanSession = 0, cameraStarting = false;
+
+async function loadZXing() {
+  if (window.ZXingBrowser?.BrowserMultiFormatReader) return;
+  if (!zxingLoadPromise) {
+    zxingLoadPromise = (async () => {
+      for (const file of ['zxing-library.min.js', 'zxing-browser.min.js']) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = new URL('/vendor/' + file, document.baseURI).href;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`Failed to load camera scanner (${file})`));
+          document.head.append(script);
+        });
+      }
+    })().catch(e => {
+      zxingLoadPromise = null;
+      throw e;
+    });
+  }
+  await zxingLoadPromise;
+}
+
 async function cameraScan() {
   const vid = document.getElementById('scanCam');
   if (!vid) return;
-  if (scanStream) { stopCam(); return; }
-  if (window.BarcodeDetector === undefined) { toast('Camera scanning not supported in this browser. Use the scan box or a USB scanner.', 'error'); return; }
+  if (cameraStarting || scanStream || scanControls) { stopCam(); return; }
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    toast('Camera scanning requires HTTPS and browser camera permission. Use barcode input if unavailable.', 'error');
+    return;
+  }
+  const button = document.getElementById('cameraToggle');
+  const session = ++cameraScanSession;
+  cameraStarting = true;
+  button.textContent = 'Starting camera...';
   try {
-    const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'upc_a', 'isbn_13', 'qr_code'] });
-    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    vid.hidden = false; vid.srcObject = scanStream; await vid.play();
-    document.querySelector('#scanBox .primary').textContent = 'Stop camera';
-    detectLoop = setInterval(async () => {
-      try {
-        const codes = await det.detect(vid);
-        if (codes.length && codes[0].rawValue) { doScan(codes[0].rawValue); stopCam(); }
-      } catch (e) {}
-    }, 400);
-  } catch (e) { toast('Camera unavailable: ' + e.message, 'error'); }
+    vid.hidden = false;
+    if (window.BarcodeDetector && typeof BarcodeDetector.getSupportedFormats === 'function') {
+      const supported = await BarcodeDetector.getSupportedFormats();
+      const formats = ['ean_13', 'ean_8', 'code_128', 'upc_a', 'upc_e']
+        .filter(format => supported.includes(format));
+      if (formats.length) {
+        const det = new BarcodeDetector({ formats });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (session !== cameraScanSession) { stream.getTracks().forEach(track => track.stop()); return; }
+        scanStream = stream;
+        vid.srcObject = stream;
+        await vid.play();
+        if (session !== cameraScanSession) {
+          stream.getTracks().forEach(track => track.stop());
+          if (scanStream === stream) scanStream = null;
+          return;
+        }
+        button.textContent = 'Stop camera';
+        let detecting = false;
+        detectLoop = setInterval(async () => {
+          if (detecting) return;
+          detecting = true;
+          try {
+            const codes = await det.detect(vid);
+            if (codes.length && codes[0].rawValue) {
+              const code = codes[0].rawValue;
+              stopCam();
+              await doScan(code);
+            }
+          } catch (e) {
+            stopCam();
+            toast('Barcode detection failed: ' + e.message, 'error');
+          } finally { detecting = false; }
+        }, 400);
+        return;
+      }
+    }
+    await loadZXing();
+    if (session !== cameraScanSession) return;
+    const reader = new ZXingBrowser.BrowserMultiFormatReader();
+    let scanned = false;
+    const controls = await reader.decodeFromConstraints(
+      { video: { facingMode: { ideal: 'environment' } } },
+      vid,
+      (result, error, controls) => {
+        if (result) {
+          if (session !== cameraScanSession) { controls?.stop(); return; }
+          scanned = true;
+          const code = result.getText();
+          if (controls) controls.stop();
+          scanControls = null;
+          vid.hidden = true;
+          button.textContent = 'Camera scan';
+          void doScan(code);
+        }
+      },
+    );
+    if (session !== cameraScanSession) { controls.stop(); return; }
+    scanControls = scanned ? null : controls;
+    if (!scanned) button.textContent = 'Stop camera';
+  } catch (e) {
+    if (session === cameraScanSession) {
+      stopCam();
+      toast('Camera unavailable: ' + e.message, 'error');
+    }
+  } finally {
+    if (session === cameraScanSession) cameraStarting = false;
+  }
 }
 
 function stopCam() {
+  cameraScanSession++;
+  cameraStarting = false;
   clearInterval(detectLoop); detectLoop = null;
+  if (scanControls) { scanControls.stop(); scanControls = null; }
   if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
   const vid = document.getElementById('scanCam'); if (vid) vid.hidden = true;
-  const btn = document.querySelector('#scanBox .primary'); if (btn) btn.textContent = 'Camera scan';
+  const btn = document.getElementById('cameraToggle'); if (btn) btn.textContent = 'Camera scan';
 }
 
 async function checkout() {
@@ -754,7 +855,7 @@ async function checkout() {
   if (payMode === 'ledger' && !custName) return toast('Customer name required for ledger (credit) billing', 'error');
   try {
     const res = await api('/api/pos/invoices', { method: 'POST', body: {
-      location_id: Number(document.getElementById('billLoc').value),
+      location_id: state.user.role === 'distributor' ? state.user.zone_id : Number(document.getElementById('billLoc').value),
       customer_name: custName, customer_phone: document.getElementById('custPhone').value,
       customer_email: document.getElementById('custEmail').value,
       payment_mode: payMode, payment_ref: payRef,

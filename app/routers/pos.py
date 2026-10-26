@@ -51,7 +51,12 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(400, "Cart is empty")
     if data.payment_mode not in PAYMENT_MODES:
         raise HTTPException(400, f"Invalid payment mode. Valid: {', '.join(PAYMENT_MODES)}")
-    loc_id = data.location_id or user["location_id"] or user["zone_id"]
+    if user["role"] == "distributor":
+        loc_id = user["zone_id"]
+        if not loc_id or (data.location_id is not None and data.location_id != loc_id):
+            raise HTTPException(403, "Distributors can only bill against their assigned zone")
+    else:
+        loc_id = data.location_id or user["location_id"] or user["zone_id"]
     if not loc_id or loc_id not in location_ids(db, user):
         raise HTTPException(400, "You have no billing location")
     loc = db.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
