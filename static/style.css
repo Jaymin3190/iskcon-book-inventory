@@ -127,8 +127,10 @@ tr:hover td { background: #fbf7ec; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 #toast {
-  position: fixed; bottom: 24px; right: 24px; background: #2a2419; color: #fff;
-  padding: 12px 18px; border-radius: 8px; font-size: 13px; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.3);
+  position: fixed; top: 100px; right: 24px; max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 124px); overflow: auto; overflow-wrap: anywhere;
+  background: #2a2419; color: #fff; padding: 12px 18px; border-radius: 8px;
+  font-size: 13px; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.3);
 }
 #toast.error { background: #b3261e; }
 #toast.success { background: #6f481b; }
@@ -175,6 +177,7 @@ tr.hl td { background: #fff3cd !important; }
 td .action, td .danger { margin-bottom: 2px; }
 
 @media (max-width: 600px) {
+  #toast { top: 100px; right: 12px; max-width: calc(100vw - 24px); max-height: calc(100vh - 112px); }
   #appView, main#content, .card { min-width: 0; max-width: 100%; }
   table { width: 100%; table-layout: fixed; }
   th, td { padding: 6px 4px; overflow-wrap: anywhere; word-break: break-word; }
