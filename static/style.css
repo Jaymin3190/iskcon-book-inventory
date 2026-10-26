@@ -176,6 +176,7 @@ td .action, td .danger { margin-bottom: 2px; }
   table { width: 100%; table-layout: fixed; }
   th, td { padding: 6px 4px; overflow-wrap: anywhere; word-break: break-word; }
   th { font-size: 10px; letter-spacing: 0; }
+  td .action, td .danger { white-space: nowrap; padding-left: 4px; padding-right: 4px; }
   #loginView { padding: 18px; }
   .login-card { padding: 30px 25px 20px; border-radius: 15px; }
   .login-brand { margin-bottom: 28px; }
