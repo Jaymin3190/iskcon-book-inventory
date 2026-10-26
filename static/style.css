@@ -172,6 +172,10 @@ tr.hl td { background: #fff3cd !important; }
 td .action, td .danger { margin-bottom: 2px; }
 
 @media (max-width: 600px) {
+  #appView, main#content, .card { min-width: 0; max-width: 100%; }
+  table { width: 100%; table-layout: fixed; }
+  th, td { padding: 6px 4px; overflow-wrap: anywhere; word-break: break-word; }
+  th { font-size: 10px; letter-spacing: 0; }
   #loginView { padding: 18px; }
   .login-card { padding: 30px 25px 20px; border-radius: 15px; }
   .login-brand { margin-bottom: 28px; }
