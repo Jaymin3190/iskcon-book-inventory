@@ -64,11 +64,13 @@ header {
   background: #8a5a1f; color: #fff; padding: 12px 20px;
   display: flex; align-items: center; justify-content: space-between;
 }
-.brand { font-weight: 700; font-size: 18px; }
-.user-box { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.brand { flex: 0 0 auto; font-weight: 700; font-size: 18px; }
+.user-box { display: flex; align-items: center; gap: 12px; min-width: 0; font-size: 13px; }
+.user-box #userInfo { min-width: 0; overflow-wrap: anywhere; }
 button.ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.5); border-radius: 5px; padding: 5px 12px; cursor: pointer; }
 button.ghost:hover { background: rgba(255,255,255,.15); }
 #mobileMenuToggle { display: none; }
+#logoutBtn { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; white-space: nowrap; }
 
 nav#tabs { display: flex; gap: 4px; background: #fffdf8; border-bottom: 1px solid #e3d6ba; padding: 0 12px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
 nav#tabs button {
@@ -291,6 +293,11 @@ td .action, td .danger { margin-bottom: 2px; }
 
 @media (min-width: 601px) and (max-width: 1200px) {
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (min-width: 601px) and (max-width: 900px) {
+  header { flex-wrap: wrap; gap: 10px; }
+  .user-box { width: 100%; justify-content: space-between; }
 }
 
 @media (min-width: 601px) and (max-width: 1100px) {
