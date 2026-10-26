@@ -31,6 +31,18 @@ const TABS = [
 
 const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, reports, users, locations };
 
+function renderCurrentTab() {
+  return RENDER[state.activeTab]().then(() => {
+    document.querySelectorAll('#content table').forEach(table => {
+      if (table.parentElement.classList.contains('table-scroll')) return;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'table-scroll';
+      table.parentElement.insertBefore(wrapper, table);
+      wrapper.appendChild(table);
+    });
+  });
+}
+
 async function login() {
   const u = document.getElementById('loginUser').value.trim();
   const p = document.getElementById('loginPass').value;
@@ -73,15 +85,15 @@ function showApp() {
     nav.classList.remove('mobile-menu-open');
     menuToggle.setAttribute('aria-expanded', 'false');
     menuToggle.textContent = 'Menu';
-    RENDER[state.activeTab]().catch(e => toast(e.message, 'error'));
+    renderCurrentTab().catch(e => toast(e.message, 'error'));
   }));
   const firstTab = nav.querySelector('button');
   firstTab.classList.add('active');
   state.activeTab = firstTab.dataset.tab;
-  RENDER[state.activeTab]().catch(e => toast(e.message, 'error'));
+  renderCurrentTab().catch(e => toast(e.message, 'error'));
 }
 
-function refreshCurrent() { if (state.user) RENDER[state.activeTab]().catch(e => toast(e.message, 'error')); }
+function refreshCurrent() { if (state.user) renderCurrentTab().catch(e => toast(e.message, 'error')); }
 
 document.getElementById('mobileMenuToggle').addEventListener('click', () => {
   const nav = document.getElementById('tabs');

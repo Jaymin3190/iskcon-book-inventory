@@ -297,9 +297,35 @@ td .action, td .danger { margin-bottom: 2px; }
   .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-@media (min-width: 601px) and (max-width: 900px) {
+@media (min-width: 601px) and (max-width: 1100px) {
   header { flex-wrap: wrap; gap: 10px; }
   .user-box { width: 100%; justify-content: space-between; }
+  nav#tabs {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 4px;
+    overflow: visible;
+    padding: 8px 12px;
+  }
+  nav#tabs button {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 6px;
+    font-size: clamp(12px, 1.1vw, 14px);
+    text-align: center;
+    white-space: normal;
+  }
+  #content .table-scroll {
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+  #content .table-scroll > table {
+    width: max-content;
+    min-width: 100%;
+    table-layout: auto;
+    white-space: nowrap;
+  }
 }
 
 @media (min-width: 601px) and (max-width: 1100px) {
