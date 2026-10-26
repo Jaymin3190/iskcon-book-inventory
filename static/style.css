@@ -163,6 +163,19 @@ tr:hover td { background: #fbf7ec; }
 .stock-inventory-table tbody tr:hover td { background: #f2e4d1; }
 
 .cart-item { display: flex; gap: 8px; align-items: center; }
+.cart-book-title { display: block; }
+.cart-book-barcode { display: block; margin-top: 3px; color: #8a6d3b; font-size: 11px; }
+.pos-scan-toolbar { display: grid; grid-template-columns: auto minmax(220px, 1fr) auto auto minmax(190px, 230px); align-items: center; }
+.pos-scan-toolbar > * { min-width: 0; }
+.pos-scan-toolbar > input,
+.pos-scan-toolbar > select { width: 100%; max-width: 100% !important; }
+.pos-scan-toolbar > .billing-location { white-space: nowrap; }
+#cartTable { table-layout: fixed; }
+#cartTable th:nth-child(1) { width: auto; }
+#cartTable th:nth-child(2) { width: 92px; }
+#cartTable th:nth-child(3) { width: 78px; }
+#cartTable th:nth-child(4) { width: 92px; }
+#cartTable th:nth-child(5) { width: 38px; }
 .upi-qr-panel { margin-top: 12px; text-align: center; }
 .upi-qr-panel p { color: #6b5a3a; font-size: 13px; margin-bottom: 8px; }
 .upi-qr-panel img { display: block; width: min(100%, 360px); height: auto; margin: 0 auto; }
@@ -223,4 +236,41 @@ td .action, td .danger { margin-bottom: 2px; }
     border-bottom-color: #eee4cf;
     border-left: 3px solid #8a5a1f;
   }
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .pos-scan-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pos-scan-toolbar > .billing-location,
+  .pos-scan-toolbar > #scanInput,
+  .pos-scan-toolbar > #manualBook { grid-column: 1 / -1; }
+  .pos-scan-toolbar > button { width: 100%; margin-right: 0; }
+  #cartTable { display: block; width: 100%; }
+  #cartTable tbody { display: block; width: 100%; }
+  #cartTable tr:first-child { display: none; }
+  #cartTable tr:not(:first-child) {
+    display: grid; width: 100%; min-width: 0;
+    grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr) 28px;
+    align-items: center; border-bottom: 1px solid #eee4cf; padding: 6px 0;
+  }
+  #cartTable td { min-width: 0; padding: 4px 2px; overflow-wrap: anywhere; }
+  #cartTable td:nth-child(1) { grid-column: 1 / -1; padding-bottom: 8px; }
+  #cartTable td:nth-child(2) { grid-column: 1; grid-row: 2; }
+  #cartTable td:nth-child(3) { grid-column: 2; grid-row: 2; }
+  #cartTable td:nth-child(4) { grid-column: 3; grid-row: 2; }
+  #cartTable td:nth-child(5) { grid-column: 4; grid-row: 2; }
+  #cartTable td:nth-child(2)::before,
+  #cartTable td:nth-child(3)::before,
+  #cartTable td:nth-child(4)::before {
+    display: block; margin-bottom: 2px; color: #8a6d3b; font-size: 10px;
+  }
+  #cartTable td:nth-child(2)::before { content: "Price"; }
+  #cartTable td:nth-child(3)::before { content: "Qty"; }
+  #cartTable td:nth-child(4)::before { content: "Total"; }
+  #cartTable td:nth-child(3) input { width: 52px !important; max-width: 100%; padding: 6px 3px; }
+}
+
+@media (min-width: 601px) and (max-width: 1100px) {
+  .pos-scan-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pos-scan-toolbar > .billing-location,
+  .pos-scan-toolbar > #scanInput,
+  .pos-scan-toolbar > #manualBook { grid-column: 1 / -1; }
+  .pos-scan-toolbar > button { width: 100%; margin-right: 0; }
 }

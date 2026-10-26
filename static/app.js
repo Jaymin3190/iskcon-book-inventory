@@ -637,7 +637,7 @@ async function pos() {
   document.getElementById('content').innerHTML = `
     <div class="card">
       <h2>Quick-scan billing</h2>
-      <div class="toolbar" id="scanBox">
+      <div class="toolbar pos-scan-toolbar" id="scanBox">
         ${isDistributor ? `<span class="billing-location">Billing zone: <strong>${esc(billingLocation.name)}</strong></span>` : `<select id="billLoc" style="max-width:220px">${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`}
         <input id="scanInput" placeholder="Scan / type barcode or ISBN, press Enter" style="flex:1" onkeydown="if(event.key==='Enter')doScan(this.value)">
         <button id="cameraToggle" class="primary" onclick="cameraScan()">Camera scan</button>
@@ -648,7 +648,7 @@ async function pos() {
         </select>
       </div>
       <table id="cartTable">
-        <tr><th>Title</th><th>Barcode</th><th>Price</th><th>Qty</th><th>Total</th><th></th></tr>
+        <tr><th>Book</th><th>Price</th><th>Qty</th><th>Total</th><th></th></tr>
       </table>
       <div id="cartEmpty" style="color:#8a6d3b;font-size:13px;margin-top:8px">Cart is empty. Scan a book to begin.</div>
       <div class="form-grid" style="margin-top:14px">
@@ -719,9 +719,10 @@ function renderCart() {
   const disc = Number(document.getElementById('discount')?.value) || 0;
   const total = Math.max(0, subtotal - disc);
   document.getElementById('cartEmpty').hidden = state.cart.length > 0;
-  table.innerHTML = `<tr><th>Title</th><th>Barcode</th><th>Price</th><th>Qty</th><th>Total</th><th></th></tr>` +
+  table.innerHTML = `<tr><th>Book</th><th>Price</th><th>Qty</th><th>Total</th><th></th></tr>` +
     state.cart.map((i, idx) => `<tr>
-      <td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>&#8377;${i.price.toFixed(2)}</td>
+      <td><span class="cart-book-title">${esc(i.title)}</span><span class="cart-book-barcode">${esc(i.barcode)}</span></td>
+      <td>&#8377;${i.price.toFixed(2)}</td>
       <td><input type="number" min="1" value="${i.qty}" style="width:60px" onchange="setCartQty(${idx},this.value)"></td>
       <td>&#8377;${(i.price * i.qty).toFixed(2)}</td>
       <td><button class="danger" onclick="removeCart(${idx})">x</button></td>
