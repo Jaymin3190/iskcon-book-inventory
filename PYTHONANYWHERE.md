@@ -47,6 +47,23 @@ so code updates do not overwrite it.
 5. Set the Web tab's source code and working directory to
    `/home/<username>/iskcon-book-inventory`, then reload the web app.
 
+## Updating a running deployment
+
+After pulling new code into the checkout:
+
+1. Run `git pull` in a Bash console inside the project directory.
+2. Click **Reload** on the **Web** tab. Python code changes are only picked up
+   after a reload.
+3. Hard-refresh the browser once (Ctrl+F5 / Cmd+Shift+R) so it drops any old
+   HTML it cached before the update.
+
+The app sends `Cache-Control: no-store` for HTML and `no-cache` for CSS/JS, and
+the page references versioned asset URLs (`style.css?v=...`, `app.js?v=...`), so
+later updates should appear without manual cache clearing. If a deployed page
+still looks outdated, confirm the **Reload** step ran and check that no static
+files mapping in the **Web** tab serves `index.html` directly, which would
+bypass the app's cache headers.
+
 Camera barcode scanning uses the mobile browser's camera and requires HTTPS
 and camera permission. The scanner processes frames in the browser; camera
 images are not uploaded to the app.

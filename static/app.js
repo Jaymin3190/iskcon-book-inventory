@@ -29,6 +29,33 @@ const TABS = [
   { id: 'locations', label: 'Locations', roles: ['super_admin'] },
 ];
 
+const TAB_GROUPS = [
+  { label: 'Overview', tabs: ['dashboard'] },
+  { label: 'Catalogue', tabs: ['books', 'stock'] },
+  { label: 'Operations', tabs: ['transfers', 'returns', 'pos'] },
+  { label: 'Insights', tabs: ['reports'] },
+  { label: 'Administration', tabs: ['users', 'locations'] },
+];
+
+const NAV_ICONS = {
+  dashboard: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  books: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  stock: '<path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"/><path d="M3 8h18v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8z"/><path d="M10 12h4"/>',
+  transfers: '<path d="M4 7h13l-3-3"/><path d="M20 17H7l3 3"/>',
+  returns: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>',
+  pos: '<circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M2 3h3l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 7H6"/>',
+  reports: '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/>',
+  locations: '<path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+};
+
+function navButton(tab) {
+  return `<button type="button" data-tab="${tab.id}">
+    <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false">${NAV_ICONS[tab.id] || ''}</svg></span>
+    <span class="nav-label">${tab.label}</span>
+  </button>`;
+}
+
 const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, reports, users, locations };
 
 function renderCurrentTab() {
@@ -55,9 +82,28 @@ async function login() {
   } catch (e) { document.getElementById('loginError').textContent = e.message; }
 }
 
+function initials(name) {
+  return String(name || '').trim().split(/\s+/).filter(Boolean).slice(0, 2)
+    .map(part => part[0].toUpperCase()).join('') || 'U';
+}
+
+function setSidebarOpen(open) {
+  const appView = document.getElementById('appView');
+  appView.classList.toggle('sidebar-open', open);
+  document.getElementById('sidebarOverlay').hidden = !open;
+  document.getElementById('menuToggle').setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('nav-open', open);
+}
+
+function setPageTitle(label) {
+  document.getElementById('pageTitle').textContent = label;
+  document.title = `${label} · ISKCON Book Inventory`;
+}
+
 function logout() {
   if (cameraStarting || scanStream || scanControls) stopCam();
   state.token = ''; state.user = null; localStorage.removeItem('tk');
+  setSidebarOpen(false);
   document.getElementById('appView').hidden = true;
   document.getElementById('loginView').hidden = false;
 }
@@ -67,41 +113,53 @@ function showApp() {
   document.getElementById('appView').hidden = false;
   const u = state.user;
   const loc = u.location_name || u.zone_name || 'Global';
-  document.getElementById('userInfo').textContent = `${u.name} (${u.role}) — ${loc}`;
+  const fullInfo = `${u.name} (${u.role}) — ${loc}`;
+  const av = initials(u.name);
+  document.getElementById('userInfo').textContent = `${u.name} · ${loc}`;
+  document.getElementById('userInfo').title = fullInfo;
+  document.getElementById('sidebarUserInfo').textContent = fullInfo;
+  document.getElementById('userAvatar').textContent = av;
+  document.getElementById('sidebarAvatar').textContent = av;
   const nav = document.getElementById('tabs');
-  const menuToggle = document.getElementById('mobileMenuToggle');
-  nav.classList.remove('mobile-menu-open');
-  menuToggle.setAttribute('aria-expanded', 'false');
-  menuToggle.textContent = 'Menu';
-  nav.innerHTML = TABS.filter(t => t.roles.includes(u.role))
-    .map(t => `<button data-tab="${t.id}">${t.label}</button>`).join('');
+  setSidebarOpen(false);
+  const allowedTabs = TABS.filter(t => t.roles.includes(u.role));
+  nav.innerHTML = TAB_GROUPS.map(group => {
+    const items = group.tabs.map(id => allowedTabs.find(t => t.id === id)).filter(Boolean);
+    if (!items.length) return '';
+    return `<div class="nav-group"><span class="nav-group-label">${group.label}</span>${items.map(navButton).join('')}</div>`;
+  }).join('');
   const availableTabs = nav.querySelectorAll('button');
   document.getElementById('appView').classList.toggle('single-tab-nav', availableTabs.length === 1);
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     nav.querySelectorAll('button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     state.activeTab = b.dataset.tab;
+    localStorage.setItem('activeTab', state.activeTab);
+    setPageTitle(b.textContent.trim());
     if (cameraStarting || scanStream || scanControls) stopCam();
-    nav.classList.remove('mobile-menu-open');
-    menuToggle.setAttribute('aria-expanded', 'false');
-    menuToggle.textContent = 'Menu';
+    setSidebarOpen(false);
     renderCurrentTab().catch(e => toast(e.message, 'error'));
   }));
-  const firstTab = nav.querySelector('button');
+  const savedTab = localStorage.getItem('activeTab');
+  const firstTab = (savedTab && nav.querySelector(`button[data-tab="${savedTab}"]`)) || nav.querySelector('button');
   firstTab.classList.add('active');
   state.activeTab = firstTab.dataset.tab;
+  setPageTitle(firstTab.textContent.trim());
   renderCurrentTab().catch(e => toast(e.message, 'error'));
 }
 
 function refreshCurrent() { if (state.user) renderCurrentTab().catch(e => toast(e.message, 'error')); }
 
-document.getElementById('mobileMenuToggle').addEventListener('click', () => {
-  const nav = document.getElementById('tabs');
-  const isOpen = nav.classList.toggle('mobile-menu-open');
-  const menuToggle = document.getElementById('mobileMenuToggle');
-  menuToggle.setAttribute('aria-expanded', String(isOpen));
-  menuToggle.textContent = isOpen ? 'Close menu' : 'Menu';
+document.getElementById('menuToggle').addEventListener('click', () => {
+  setSidebarOpen(!document.getElementById('appView').classList.contains('sidebar-open'));
 });
+document.getElementById('sidebarOverlay').addEventListener('click', () => setSidebarOpen(false));
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  setSidebarOpen(false);
+  closeModal();
+});
+window.addEventListener('resize', () => { if (window.innerWidth > 960) setSidebarOpen(false); });
 
 function openModal(html) {
   document.getElementById('modalBox').innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;

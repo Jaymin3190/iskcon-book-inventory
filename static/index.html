@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
 <title>ISKCON Book Inventory &amp; Distribution</title>
-<link rel="stylesheet" href="style.css?v=28">
+<link rel="stylesheet" href="style.css?v=31">
 </head>
 <body>
 <div id="loginView">
@@ -30,16 +30,36 @@
 </div>
 
 <div id="appView" hidden>
-  <header>
-    <div class="brand">ISKCON Book Distribution</div>
-    <div class="user-box">
-      <span id="userInfo"></span>
-      <button id="mobileMenuToggle" class="ghost" type="button" aria-controls="tabs" aria-expanded="false">Menu</button>
-      <button id="logoutBtn" class="ghost">Logout</button>
+  <div id="sidebarOverlay" hidden></div>
+  <aside id="sidebar" class="sidebar" aria-label="Application menu">
+    <div class="sidebar-brand">
+      <span class="sidebar-mark" aria-hidden="true">IB</span>
+      <span>
+        <strong>ISKCON</strong>
+        <small>Book Distribution</small>
+      </span>
     </div>
-  </header>
-  <nav id="tabs" aria-label="Main navigation"></nav>
-  <main id="content"></main>
+    <nav id="tabs" aria-label="Main navigation"></nav>
+    <div class="sidebar-user">
+      <span id="sidebarAvatar" class="user-avatar" aria-hidden="true">U</span>
+      <span id="sidebarUserInfo" class="sidebar-user-info"></span>
+    </div>
+  </aside>
+  <div class="app-main">
+    <header class="topbar">
+      <button id="menuToggle" type="button" aria-controls="sidebar" aria-expanded="false">
+        <span aria-hidden="true">&#9776;</span>
+        <span>Menu</span>
+      </button>
+      <h1 id="pageTitle">Dashboard</h1>
+      <div class="topbar-user">
+        <span id="userInfo" class="topbar-user-info"></span>
+        <span id="userAvatar" class="user-avatar topbar-avatar" aria-hidden="true">U</span>
+        <button id="logoutBtn" class="logout-btn" type="button">Logout</button>
+      </div>
+    </header>
+    <main id="content"></main>
+  </div>
 </div>
 
 <div id="modalBackdrop" hidden>
@@ -48,6 +68,6 @@
 
 <div id="toast" hidden></div>
 
-<script src="app.js?v=21"></script>
+<script src="app.js?v=23"></script>
 </body>
 </html>
