@@ -63,16 +63,29 @@ body {
 header {
   background: #8a5a1f; color: #fff; padding: 12px 20px;
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px 16px;
 }
-.brand { flex: 0 0 auto; font-weight: 700; font-size: 18px; }
-.user-box { display: flex; align-items: center; gap: 12px; min-width: 0; font-size: 13px; }
-.user-box #userInfo { min-width: 0; overflow-wrap: anywhere; }
+.brand { flex: 0 1 auto; min-width: 0; font-weight: 700; font-size: 18px; overflow-wrap: anywhere; }
+.user-box {
+  display: flex; align-items: center; justify-content: flex-end;
+  flex: 1 1 auto; gap: 10px; min-width: 0; max-width: 100%; font-size: 13px;
+}
+.user-box #userInfo { min-width: 0; flex: 0 1 auto; overflow-wrap: anywhere; }
 button.ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.5); border-radius: 5px; padding: 5px 12px; cursor: pointer; }
 button.ghost:hover { background: rgba(255,255,255,.15); }
 #mobileMenuToggle { display: none; }
-#logoutBtn { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; white-space: nowrap; }
+#mobileMenuToggle, #logoutBtn { flex: 0 0 auto; white-space: nowrap; }
+#logoutBtn { display: inline-flex; align-items: center; justify-content: center; }
 
-nav#tabs { display: flex; gap: 4px; background: #fffdf8; border-bottom: 1px solid #e3d6ba; padding: 0 12px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
+nav#tabs {
+  display: flex; gap: 4px; background: #fffdf8; border-bottom: 1px solid #e3d6ba;
+  padding: 0 12px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin; scrollbar-color: #c9a77b #f6efe1;
+}
+nav#tabs::-webkit-scrollbar { height: 9px; }
+nav#tabs::-webkit-scrollbar-track { background: #f6efe1; }
+nav#tabs::-webkit-scrollbar-thumb { background: #c9a77b; border-radius: 99px; }
 nav#tabs button {
   background: transparent; border: none; border-bottom: 3px solid transparent;
   padding: 12px 16px; font-size: 14px; color: #6b5a3a; cursor: pointer; flex: 0 0 auto; white-space: nowrap;
@@ -85,7 +98,8 @@ main#content { width: 100%; min-width: 0; padding: 20px; max-width: 1100px; marg
 .card h2 { font-size: 16px; color: #8a5a1f; margin-bottom: 12px; }
 
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-input, select, textarea { padding: 8px 10px; border: 1px solid #d8c9a8; border-radius: 6px; font-size: 13px; background: #fff; }
+input, select, textarea { padding: 8px 10px; border: 1px solid #d8c9a8; border-radius: 6px; font-size: 13px; background: #fff; max-width: 100%; }
+img, video { max-width: 100%; }
 button.primary { background: #8a5a1f; color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 button.primary:hover { background: #714814; }
 button.primary.small { padding: 5px 10px; font-size: 12px; }
@@ -98,6 +112,20 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { border-bottom: 1px solid #eee4cf; padding: 8px 10px; text-align: left; }
 th { color: #6b5a3a; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; background: #f7f1e1; }
 tr:hover td { background: #fbf7ec; }
+
+/* Every table gets a usable horizontal scrollbar when its columns do not fit. */
+.table-scroll {
+  width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin; scrollbar-color: #c9a77b #f6efe1;
+}
+.table-scroll::-webkit-scrollbar { height: 10px; }
+.table-scroll::-webkit-scrollbar-track { background: #f6efe1; border-radius: 99px; }
+.table-scroll::-webkit-scrollbar-thumb { background: #c9a77b; border-radius: 99px; }
+.table-scroll::-webkit-scrollbar-thumb:hover { background: #8a5a1f; }
+@media (min-width: 601px) {
+  .table-scroll > table { width: max-content; min-width: 100%; table-layout: auto; }
+}
 
 .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .badge.requested { background: #fde9b8; color: #7a5a00; }
@@ -137,7 +165,7 @@ tr:hover td { background: #fbf7ec; }
 #toast.error { background: #b3261e; }
 #toast.success { background: #6f481b; }
 
-.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px; }
 .stat { background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 16px; }
 .stat .num { font-size: 24px; font-weight: 700; color: #8a5a1f; }
 .stat .lbl { font-size: 12px; color: #6b5a3a; margin-top: 4px; }
@@ -197,7 +225,6 @@ td .action, td .danger { margin-bottom: 2px; }
 @media (max-width: 600px) {
   #toast { top: 100px; right: 12px; max-width: calc(100vw - 24px); max-height: calc(100vh - 112px); }
   #appView, main#content, .card { min-width: 0; max-width: 100%; }
-  .stats { grid-template-columns: minmax(0, 1fr); }
   table { width: 100%; table-layout: fixed; }
   th, td { padding: 6px 4px; overflow-wrap: anywhere; word-break: break-word; }
   th { font-size: 10px; letter-spacing: 0; }
@@ -206,20 +233,6 @@ td .action, td .danger { margin-bottom: 2px; }
   .login-card { padding: 30px 25px 20px; border-radius: 15px; }
   .login-brand { margin-bottom: 28px; }
   .login-card h1 { font-size: 27px; }
-  header {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .user-box {
-    width: 100%;
-    justify-content: space-between;
-  }
-  .user-box span {
-    min-width: 0;
-    flex: 1;
-    overflow-wrap: anywhere;
-  }
-  button.ghost { flex-shrink: 0; }
   #mobileMenuToggle { display: inline-flex; }
   nav#tabs {
     display: none;
@@ -291,41 +304,6 @@ td .action, td .danger { margin-bottom: 2px; }
   #cartTable td:nth-child(3)::before { content: "Qty"; }
   #cartTable td:nth-child(4)::before { content: "Total"; }
   #cartTable td:nth-child(3) input { width: 52px !important; max-width: 100%; padding: 6px 3px; }
-}
-
-@media (min-width: 601px) and (max-width: 1200px) {
-  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-
-@media (min-width: 601px) and (max-width: 1100px) {
-  header { flex-wrap: wrap; gap: 10px; }
-  .user-box { width: 100%; justify-content: space-between; }
-  nav#tabs {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 4px;
-    overflow: visible;
-    padding: 8px 12px;
-  }
-  nav#tabs button {
-    width: 100%;
-    min-width: 0;
-    padding: 10px 6px;
-    font-size: clamp(12px, 1.1vw, 14px);
-    text-align: center;
-    white-space: normal;
-  }
-  #content .table-scroll {
-    width: 100%;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-  }
-  #content .table-scroll > table {
-    width: max-content;
-    min-width: 100%;
-    table-layout: auto;
-    white-space: nowrap;
-  }
 }
 
 @media (min-width: 601px) and (max-width: 1100px) {
