@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
 <title>ISKCON Book Inventory &amp; Distribution</title>
-<link rel="stylesheet" href="style.css?v=31">
+<link rel="stylesheet" href="style.css?v=33">
 </head>
 <body>
 <div id="loginView">
@@ -47,15 +47,17 @@
   </aside>
   <div class="app-main">
     <header class="topbar">
-      <button id="menuToggle" type="button" aria-controls="sidebar" aria-expanded="false">
-        <span aria-hidden="true">&#9776;</span>
-        <span>Menu</span>
-      </button>
-      <h1 id="pageTitle">Dashboard</h1>
-      <div class="topbar-user">
-        <span id="userInfo" class="topbar-user-info"></span>
-        <span id="userAvatar" class="user-avatar topbar-avatar" aria-hidden="true">U</span>
-        <button id="logoutBtn" class="logout-btn" type="button">Logout</button>
+      <div class="topbar-inner">
+        <button id="menuToggle" type="button" aria-controls="sidebar" aria-expanded="false">
+          <span aria-hidden="true">&#9776;</span>
+          <span>Menu</span>
+        </button>
+        <h1 id="pageTitle">Dashboard</h1>
+        <div class="topbar-user">
+          <span id="userInfo" class="topbar-user-info"></span>
+          <span id="userAvatar" class="user-avatar topbar-avatar" aria-hidden="true">U</span>
+          <button id="logoutBtn" class="logout-btn" type="button">Logout</button>
+        </div>
       </div>
     </header>
     <main id="content"></main>

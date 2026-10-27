@@ -7,6 +7,11 @@ body {
   min-height: 100vh;
 }
 
+:root {
+  --content-max: 1280px;
+  --content-pad: 20px;
+}
+
 #loginView {
   position: relative;
   display: flex; align-items: center; justify-content: center;
@@ -123,8 +128,12 @@ nav#tabs button:focus-visible { outline: 2px solid #e0b276; outline-offset: 2px;
 .app-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 100vh; margin-left: 252px; }
 .topbar {
   position: sticky; top: 0; z-index: 40;
-  display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 20px;
   background: rgba(255,253,248,.96); border-bottom: 1px solid #e3d6ba; backdrop-filter: blur(8px);
+}
+.topbar-inner {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; max-width: var(--content-max); margin: 0 auto;
+  min-height: 60px; padding: 10px var(--content-pad);
 }
 .topbar h1 {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -157,7 +166,7 @@ button.logout-btn:focus-visible { outline: 3px solid #b8732c; outline-offset: 2p
 #appView.single-tab-nav .app-main { margin-left: 0; }
 #appView.single-tab-nav #menuToggle { display: none; }
 
-main#content { width: 100%; min-width: 0; padding: 20px; max-width: 1100px; margin: 0 auto; }
+main#content { width: 100%; min-width: 0; padding: var(--content-pad); max-width: var(--content-max); margin: 0 auto; }
 .card { min-width: 0; background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 18px; margin-bottom: 18px; }
 .card h2 { font-size: 16px; color: #8a5a1f; margin-bottom: 12px; }
 
@@ -229,7 +238,7 @@ tr:hover td { background: #fbf7ec; }
 #toast.error { background: #b3261e; }
 #toast.success { background: #6f481b; }
 
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px; margin-bottom: 18px; }
 .stat { background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 16px; }
 .stat .num { font-size: 24px; font-weight: 700; color: #8a5a1f; }
 .stat .lbl { font-size: 12px; color: #6b5a3a; margin-top: 4px; }
@@ -296,7 +305,7 @@ td .action, td .danger { margin-bottom: 2px; }
   #sidebarOverlay { z-index: 55; }
   .app-main { margin-left: 0; }
   #menuToggle { display: inline-flex; }
-  .topbar { padding: 8px 12px; gap: 10px; }
+  .topbar-inner { padding: 8px var(--content-pad); gap: 10px; }
   .topbar-user-info, .topbar-avatar { display: none; }
 }
 
@@ -307,8 +316,9 @@ td .action, td .danger { margin-bottom: 2px; }
 @media (max-width: 600px) {
   #toast { top: 88px; right: 12px; max-width: calc(100vw - 24px); max-height: calc(100vh - 100px); }
   #appView, main#content, .card { min-width: 0; max-width: 100%; }
-  main#content { padding: 14px 12px 20px; }
-  .topbar { min-height: 54px; padding: 7px 10px; }
+  :root { --content-pad: 12px; }
+  main#content { padding: 14px var(--content-pad) 20px; }
+  .topbar-inner { min-height: 54px; padding: 7px var(--content-pad); }
   .topbar h1 { font-size: 15px; }
   button.logout-btn { padding: 6px 10px; font-size: 12px; }
   #menuToggle { padding: 6px 9px; font-size: 12px; }
