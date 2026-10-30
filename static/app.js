@@ -1254,3 +1254,36 @@ document.getElementById('logoutBtn').addEventListener('click', logout);
     showApp();
   } catch (e) { logout(); }
 })();
+
+// Temporary opt-in layout readout: open the app with ?diag=1 to see the real
+// viewport measurements and any element that spills past the window.
+if (new URLSearchParams(location.search).has('diag')) {
+  const box = document.createElement('div');
+  box.id = 'diagBox';
+  box.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9999;max-width:calc(100vw - 16px);' +
+    'background:#1b1208;color:#ffe9c7;font:12px/1.55 Consolas,monospace;padding:10px 12px;' +
+    'border-radius:8px;white-space:pre-wrap;box-shadow:0 8px 24px rgba(0,0,0,.45)';
+  const update = () => {
+    const de = document.documentElement;
+    const vv = window.visualViewport;
+    const spill = [...document.querySelectorAll('#appView *')]
+      .map(el => ({ el, r: el.getBoundingClientRect() }))
+      .filter(x => x.r.width > 0 && x.r.right > de.clientWidth + 1)
+      .sort((a, b) => b.r.right - a.r.right)
+      .slice(0, 3)
+      .map(x => `${x.el.tagName.toLowerCase()}.${String(x.el.className).split(' ')[0]} @${Math.round(x.r.right)}`);
+    box.textContent = [
+      `innerWidth ${window.innerWidth}  clientWidth ${de.clientWidth}`,
+      `scrollWidth ${de.scrollWidth}  overflow ${de.scrollWidth - de.clientWidth}px`,
+      `devicePixelRatio ${window.devicePixelRatio}`,
+      `screen ${window.screen.width}x${window.screen.height}`,
+      `visualViewport ${vv ? `${Math.round(vv.width)}px scale ${vv.scale}` : 'n/a'}`,
+      `window outer ${window.outerWidth}x${window.outerHeight}`,
+      spill.length ? `spill: ${spill.join('  ')}` : 'spill: none',
+    ].join('\n');
+  };
+  update();
+  setInterval(update, 800);
+  window.addEventListener('resize', update);
+  document.body.appendChild(box);
+}
