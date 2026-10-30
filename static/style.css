@@ -116,14 +116,37 @@ nav#tabs button.active { background: #8a5a1f; color: #fff; font-weight: 600; box
 nav#tabs button:focus-visible { outline: 2px solid #e0b276; outline-offset: 2px; }
 
 .sidebar-user {
-  display: flex; align-items: center; gap: 10px;
-  padding: 14px 16px 18px; border-top: 1px solid rgba(255,255,255,.12);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px 16px; border-top: 1px solid rgba(255,255,255,.12);
 }
+.sidebar-user-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .user-avatar {
   display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px;
   border-radius: 50%; background: #c9a77b; color: #3b2a17; font-size: 12px; font-weight: 700;
 }
-.sidebar-user-info { color: #d8cab3; font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.sidebar-user-info { display: flex; flex-direction: column; min-width: 0; line-height: 1.4; }
+.sidebar-user-info strong {
+  color: #f0e4d2; font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-user-info span {
+  color: #bfae94; font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-logout {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; padding: 8px 12px;
+  border: 1px solid rgba(255,255,255,.24); border-radius: 8px;
+  background: rgba(255,255,255,.06); color: #f4e8d6;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.sidebar-logout svg {
+  width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.sidebar-logout:hover { background: rgba(255,255,255,.16); color: #fff; }
+.sidebar-logout:focus-visible { outline: 2px solid #e0b276; outline-offset: 2px; }
 
 .app-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 100vh; margin-left: 252px; }
 .topbar {
@@ -133,13 +156,13 @@ nav#tabs button:focus-visible { outline: 2px solid #e0b276; outline-offset: 2px;
 .topbar-inner {
   display: flex; align-items: center; gap: 12px;
   width: 100%; max-width: var(--content-max); margin: 0 auto;
-  min-height: 60px; padding: 10px var(--content-pad);
+  min-height: 60px; padding: 10px var(--content-pad); box-sizing: border-box;
 }
 .topbar h1 {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: #4a371c; font-size: 16px; font-weight: 600; letter-spacing: -.01em;
 }
-.topbar-user { display: flex; align-items: center; gap: 10px; margin-left: auto; min-width: 0; }
+.topbar-user { display: none; align-items: center; gap: 10px; margin-left: auto; min-width: 0; }
 .topbar-user-info {
   min-width: 0; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: #6b5a3a; font-size: 12px;
@@ -165,8 +188,9 @@ button.logout-btn:focus-visible { outline: 3px solid #b8732c; outline-offset: 2p
 #appView.single-tab-nav .sidebar { display: none; }
 #appView.single-tab-nav .app-main { margin-left: 0; }
 #appView.single-tab-nav #menuToggle { display: none; }
+#appView.single-tab-nav .topbar-user { display: flex; }
 
-main#content { width: 100%; min-width: 0; padding: var(--content-pad); max-width: var(--content-max); margin: 0 auto; }
+main#content { width: 100%; min-width: 0; padding: var(--content-pad); max-width: var(--content-max); margin: 0 auto; box-sizing: border-box; }
 .card { min-width: 0; background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 18px; margin-bottom: 18px; }
 .card h2 { font-size: 16px; color: #8a5a1f; margin-bottom: 12px; }
 

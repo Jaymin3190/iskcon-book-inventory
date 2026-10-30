@@ -117,7 +117,9 @@ function showApp() {
   const av = initials(u.name);
   document.getElementById('userInfo').textContent = `${u.name} · ${loc}`;
   document.getElementById('userInfo').title = fullInfo;
-  document.getElementById('sidebarUserInfo').textContent = fullInfo;
+  const roleLabel = String(u.role || '').replace(/_/g, ' ');
+  document.getElementById('sidebarUserInfo').innerHTML =
+    `<strong>${esc(u.name)}</strong><span>${esc(roleLabel)} · ${esc(loc)}</span>`;
   document.getElementById('userAvatar').textContent = av;
   document.getElementById('sidebarAvatar').textContent = av;
   const nav = document.getElementById('tabs');
@@ -154,6 +156,14 @@ document.getElementById('menuToggle').addEventListener('click', () => {
   setSidebarOpen(!document.getElementById('appView').classList.contains('sidebar-open'));
 });
 document.getElementById('sidebarOverlay').addEventListener('click', () => setSidebarOpen(false));
+document.getElementById('sidebarLogout').addEventListener('click', logout);
+// Any click on the page itself (not the menu) closes the open panel.
+document.addEventListener('click', e => {
+  const appView = document.getElementById('appView');
+  if (!appView.classList.contains('sidebar-open')) return;
+  if (e.target.closest('#sidebar') || e.target.closest('#menuToggle')) return;
+  setSidebarOpen(false);
+});
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   setSidebarOpen(false);
