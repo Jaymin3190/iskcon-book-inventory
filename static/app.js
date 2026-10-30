@@ -192,7 +192,7 @@ const scanDb = new Map();
 let scanCameraHandler = null;
 
 function scanBoxHTML(placeholder = 'Scan barcode / ISBN, press Enter', camera = false) {
-  return `<div class="cart-item" style="margin-bottom:10px">
+  return `<div class="cart-item barcode-scan-row" style="margin-bottom:10px">
     <span style="font-size:12px;color:#8a5a1f;white-space:nowrap">Barcode scan</span>
     <input id="scanStripInput" placeholder="${esc(placeholder)}" autocomplete="off" style="flex:1;font-family:Consolas,monospace">
     ${camera ? '<button id="scanBoxCameraToggle" class="action" type="button" onclick="cameraScan(scanCameraHandler, \'scanBoxCameraToggle\')">Camera scan</button>' : ''}

@@ -349,20 +349,39 @@ td .action, td .danger { margin-bottom: 2px; }
   #appView, main#content, .card { min-width: 0; max-width: 100%; }
   :root { --content-pad: 12px; }
   main#content { padding: 14px var(--content-pad) 20px; }
+  .card { padding: 14px; border-radius: 8px; }
   .topbar-inner { min-height: 54px; padding: 7px var(--content-pad); }
   .topbar h1 { font-size: 15px; }
   button.logout-btn { padding: 6px 10px; font-size: 12px; }
   #menuToggle { padding: 6px 9px; font-size: 12px; }
   .sidebar-user { padding: 12px 14px 16px; }
-  table { width: 100%; table-layout: fixed; }
-  th, td { padding: 6px 4px; overflow-wrap: anywhere; word-break: break-word; }
-  th { font-size: 10px; letter-spacing: 0; }
-  td .action, td .danger { white-space: nowrap; padding-left: 4px; padding-right: 4px; }
+  #loginView input,
+  main#content input, main#content select, main#content textarea,
+  #modalBox input, #modalBox select, #modalBox textarea {
+    min-height: 44px; font-size: 16px;
+  }
+  main#content button:not(td button), #modalBox button:not(.modal-close) { min-height: 44px; }
+  .table-scroll > table:not(.stock-summary-table):not(#cartTable) {
+    width: max-content; min-width: 100%; table-layout: auto;
+  }
+  .table-scroll > table:not(.stock-summary-table):not(#cartTable) th,
+  .table-scroll > table:not(.stock-summary-table):not(#cartTable) td {
+    padding: 9px 10px; overflow-wrap: normal; word-break: normal;
+  }
+  .table-scroll > table:not(.stock-summary-table):not(#cartTable) th { font-size: 11px; }
+  td .action, td .danger { min-height: 36px; white-space: nowrap; padding: 6px 8px; }
   #loginView { padding: 18px; }
   .login-card { padding: 30px 25px 20px; border-radius: 15px; }
   .login-brand { margin-bottom: 28px; }
   .login-card h1 { font-size: 27px; }
   .form-grid { grid-template-columns: minmax(0, 1fr); }
+  #modalBackdrop { align-items: flex-end; }
+  #modalBox { width: 100%; max-width: 100%; max-height: 92dvh; padding: 20px 16px; border-radius: 14px 14px 0 0; }
+  #modalBox .modal-close { position: sticky; float: right; top: 0; margin: -8px -6px 0 8px; }
+  .barcode-scan-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .barcode-scan-row > span { grid-column: 1 / -1; }
+  .barcode-scan-row > input { min-width: 0; }
+  .barcode-scan-row > button { margin: 0; white-space: nowrap; }
   .stock-summary-table,
   .stock-summary-table tbody { display: block; width: 100%; }
   .stock-summary-table tr:first-child { display: none; }
