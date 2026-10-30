@@ -172,10 +172,14 @@ document.addEventListener('keydown', e => {
 window.addEventListener('resize', () => { if (window.innerWidth > 960) setSidebarOpen(false); });
 
 function openModal(html) {
+  if (cameraStarting || scanStream || scanControls) stopCam();
   document.getElementById('modalBox').innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;
   document.getElementById('modalBackdrop').hidden = false;
 }
-function closeModal() { document.getElementById('modalBackdrop').hidden = true; }
+function closeModal() {
+  if (cameraStarting || scanStream || scanControls) stopCam();
+  document.getElementById('modalBackdrop').hidden = true;
+}
 document.getElementById('modalBackdrop').addEventListener('click', e => { if (e.target.id === 'modalBackdrop') closeModal(); });
 
 function toast(msg, type = '') {
@@ -185,39 +189,45 @@ function toast(msg, type = '') {
 }
 
 const scanDb = new Map();
+let scanCameraHandler = null;
 
-function scanBoxHTML(placeholder = 'Scan barcode / ISBN, press Enter') {
+function scanBoxHTML(placeholder = 'Scan barcode / ISBN, press Enter', camera = false) {
   return `<div class="cart-item" style="margin-bottom:10px">
     <span style="font-size:12px;color:#8a5a1f;white-space:nowrap">Barcode scan</span>
     <input id="scanStripInput" placeholder="${esc(placeholder)}" autocomplete="off" style="flex:1;font-family:Consolas,monospace">
-  </div>`;
+    ${camera ? '<button id="scanBoxCameraToggle" class="action" type="button" onclick="cameraScan(scanCameraHandler, \'scanBoxCameraToggle\')">Camera scan</button>' : ''}
+  </div>${camera ? '<video id="scanCam" hidden playsinline muted></video>' : ''}`;
 }
 
 function bindScan(onScan, onInput, keepFocus = true) {
   const input = document.getElementById('scanStripInput');
   if (!input) return;
+  const handleCode = async code => {
+    try {
+      const b = await api('/api/books/lookup/' + encodeURIComponent(code));
+      scanDb.set('last', b);
+      onScan(b);
+      toast(b.title + ' matched', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  scanCameraHandler = handleCode;
   input.focus();
   input.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     const code = input.value.trim();
     input.value = '';
     if (!code) return;
-    try {
-      const b = await api('/api/books/lookup/' + encodeURIComponent(code));
-      scanDb.set('last', b);
-      onScan(b);
-      toast(b.title + ' matched', 'success');
-    } catch (err) { toast('No book for barcode ' + code, 'error'); }
+    await handleCode(code);
     if (keepFocus) input.focus();
   });
   if (onInput) input.addEventListener('input', () => onInput(input.value));
   return input;
 }
 
-async function pageScanStrip(onScan, placeholder = 'Scan barcode / ISBN, press Enter') {
+async function pageScanStrip(onScan, placeholder = 'Scan barcode / ISBN, press Enter', camera = false) {
   const holder = document.createElement('div');
   holder.id = 'pageScanStrip';
-  holder.innerHTML = scanBoxHTML(placeholder);
+  holder.innerHTML = scanBoxHTML(placeholder, camera);
   document.getElementById('content').prepend(holder);
   return bindScan(onScan, null);
 }
@@ -284,7 +294,10 @@ async function books() {
   });
   await loadBookRows();
   if (['super_admin', 'zone_admin', 'distributor', 'temple'].includes(state.user.role)) {
-    pageScanStrip(() => refreshCurrent(), 'Scan a book barcode to highlight it in the list');
+    pageScanStrip(book => {
+      bookQuery = book.barcode;
+      refreshCurrent();
+    }, 'Scan a book barcode to highlight it in the list', true);
   }
 }
 
@@ -363,7 +376,7 @@ async function stock() {
         ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td><td>${adjustmentWarehouse && r.location_id === adjustmentWarehouse.id ? `<button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button>` : ''}<button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button></td></tr>`).join('') || '<tr><td colspan="8" class="hint">No stock rows found.</td></tr>'}
       </table>
     </div>`;
-  pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row');
+  pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row', true);
 }
 
 async function stockAdjustModal(bookId = null, locationId = null) {
@@ -431,7 +444,7 @@ async function scCreate() {
   const rows = await api('/api/stock?location_id=' + loc);
   state.scCountId = res.count_id;
   openModal(`<h3>Stock count #${res.count_id} — enter counted quantities</h3>
-    ${scanBoxHTML('Scan a barcode to jump to that book row')}
+    ${scanBoxHTML('Scan a barcode to jump to that book row', true)}
     <table id="scTable"><tr><th>Title</th><th>System qty</th><th>Counted</th></tr>
       ${rows.map(r => `<tr data-book="${r.book_id}" data-barcode="${esc(r.barcode)}"><td>${esc(r.title)}</td><td>${r.qty}</td><td><input type="number" min="0" value="${r.qty}" data-book="${r.book_id}"></td></tr>`).join('')}
     </table>
@@ -522,7 +535,7 @@ async function transferForm() {
       <div class="form-row"><label>To zone or store</label><select id="tfTo">${destinations.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
     </div>
     <div class="form-row"><label>Note</label><input id="tfNote"></div>
-    ${scanBoxHTML('Scan barcode to add book to transfer')}
+    ${scanBoxHTML('Scan barcode to add book to transfer', true)}
     <div id="trItems"></div>
     <button class="action" onclick="trAddRow()">+ Add item</button>
     <br><br><button class="primary" onclick="trSubmit()">Submit request</button>`);
@@ -600,7 +613,7 @@ async function returnForm() {
   openModal(`<h3>Record return</h3>
     <div class="form-row"><label>Location</label><select id="rtLoc">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
     <div class="form-row"><label>Reason</label><input id="rtReason"></div>
-    ${scanBoxHTML('Scan barcode to add book to return')}
+    ${scanBoxHTML('Scan barcode to add book to return', true)}
     <div id="rtItems"></div>
     <button class="action" onclick="rtAddRow()">+ Add item</button>
     <br><br><button class="primary" onclick="rtSubmit()">Record return</button>`);
@@ -676,7 +689,7 @@ async function damagedForm() {
   state.books = books;
   openModal(`<h3>Write off damaged stock</h3>
     <div class="form-row"><label>Location</label><select id="dmLoc">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
-    ${scanBoxHTML('Scan barcode to select book')}
+    ${scanBoxHTML('Scan barcode to select book', true)}
     <div class="form-row"><label>Book</label>
       <select id="dmBook"><option value="">Select book</option>
         ${books.map(b => `<option value="${b.id}">${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}
@@ -828,6 +841,7 @@ function renderCart() {
 
 let scanStream = null, detectLoop = null, scanControls = null, zxingLoadPromise = null;
 let cameraScanSession = 0, cameraStarting = false;
+let activeCameraButtonId = 'cameraToggle';
 
 async function loadZXing() {
   if (window.ZXingBrowser?.BrowserMultiFormatReader) return;
@@ -850,7 +864,7 @@ async function loadZXing() {
   await zxingLoadPromise;
 }
 
-async function cameraScan() {
+async function cameraScan(onScan = null, buttonId = 'cameraToggle') {
   const vid = document.getElementById('scanCam');
   if (!vid) return;
   if (cameraStarting || scanStream || scanControls) { stopCam(); return; }
@@ -858,10 +872,19 @@ async function cameraScan() {
     toast('Camera scanning requires HTTPS and browser camera permission. Use barcode input if unavailable.', 'error');
     return;
   }
-  const button = document.getElementById('cameraToggle');
+  const button = document.getElementById(buttonId);
+  if (!button) return;
+  activeCameraButtonId = buttonId;
   const session = ++cameraScanSession;
   cameraStarting = true;
   button.textContent = 'Starting camera...';
+  const handleScan = onScan || (buttonId === 'cameraToggle' ? doScan : scanCameraHandler);
+  if (!handleScan) {
+    cameraStarting = false;
+    button.textContent = 'Camera scan';
+    toast('Barcode scan is not ready. Please try again.', 'error');
+    return;
+  }
   try {
     vid.hidden = false;
     if (window.BarcodeDetector && typeof BarcodeDetector.getSupportedFormats === 'function') {
@@ -890,7 +913,7 @@ async function cameraScan() {
             if (codes.length && codes[0].rawValue) {
               const code = codes[0].rawValue;
               stopCam();
-              await doScan(code);
+              await handleScan(code);
             }
           } catch (e) {
             stopCam();
@@ -916,7 +939,7 @@ async function cameraScan() {
           scanControls = null;
           vid.hidden = true;
           button.textContent = 'Camera scan';
-          void doScan(code);
+          void handleScan(code);
         }
       },
     );
@@ -940,7 +963,8 @@ function stopCam() {
   if (scanControls) { scanControls.stop(); scanControls = null; }
   if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
   const vid = document.getElementById('scanCam'); if (vid) vid.hidden = true;
-  const btn = document.getElementById('cameraToggle'); if (btn) btn.textContent = 'Camera scan';
+  const btn = document.getElementById(activeCameraButtonId); if (btn) btn.textContent = 'Camera scan';
+  activeCameraButtonId = 'cameraToggle';
 }
 
 async function checkout() {

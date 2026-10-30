@@ -187,12 +187,14 @@ check("distributor sales report restricted to managers", code == 403)
 
 _, inv_detail = call("GET", f"/api/pos/invoices/{inv['invoice_id']}", token=temple_t)
 check("invoice detail has items", len(inv_detail["items"]) == 1)
+check("invoice detail shows cashier display name", inv_detail["cashier_name"] == "Distributor")
 
 req = urllib.request.Request(f"{BASE}/api/pos/invoices/{inv['invoice_id']}/print")
 req.add_header("Authorization", "Bearer " + temple_t)
 with urllib.request.urlopen(req) as resp:
     html_body = resp.read().decode()
 check("printable invoice HTML", "<html" in html_body.lower() or "doctype" in html_body.lower())
+check("printed invoice shows cashier display name", "Cashier: Distributor" in html_body)
 
 # --- stock count ---
 code, cnt = call("POST", "/api/stock/counts", token=temple_t, body={"location_id": 1})

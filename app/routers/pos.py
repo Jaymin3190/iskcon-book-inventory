@@ -36,7 +36,7 @@ class InvoiceIn(BaseModel):
 @router.get("/invoices")
 def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     ids = location_ids(db, user)
-    sql = """SELECT i.*, l.code AS location_code, l.name AS location_name, u.username AS cashier_name
+    sql = """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
              FROM invoices i
              JOIN locations l ON l.id = i.location_id
              LEFT JOIN users u ON u.id = i.cashier_id
@@ -110,7 +110,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
 @router.get("/invoices/{invoice_id}")
 def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
-        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.username AS cashier_name
+        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
@@ -172,7 +172,7 @@ def invoice_html(inv, items, org_name="ISKCON"):
 @router.get("/invoices/{invoice_id}/print", response_class=HTMLResponse)
 def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
-        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.username AS cashier_name
+        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
