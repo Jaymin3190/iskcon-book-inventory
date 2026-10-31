@@ -101,7 +101,7 @@ function setPageTitle(label) {
 }
 
 function logout() {
-  if (cameraStarting || scanStream || scanControls) stopCam();
+  stopCam();
   state.token = ''; state.user = null; localStorage.removeItem('tk');
   setSidebarOpen(false);
   document.getElementById('appView').hidden = true;
@@ -138,7 +138,7 @@ function showApp() {
     state.activeTab = b.dataset.tab;
     localStorage.setItem('activeTab', state.activeTab);
     setPageTitle(b.textContent.trim());
-    if (cameraStarting || scanStream || scanControls) stopCam();
+    stopCam();
     setSidebarOpen(false);
     renderCurrentTab().catch(e => toast(e.message, 'error'));
   }));
@@ -172,12 +172,12 @@ document.addEventListener('keydown', e => {
 window.addEventListener('resize', () => { if (window.innerWidth > 960) setSidebarOpen(false); });
 
 function openModal(html) {
-  if (cameraStarting || scanStream || scanControls) stopCam();
+  stopCam();
   document.getElementById('modalBox').innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;
   document.getElementById('modalBackdrop').hidden = false;
 }
 function closeModal() {
-  if (cameraStarting || scanStream || scanControls) stopCam();
+  stopCam();
   document.getElementById('modalBackdrop').hidden = true;
 }
 document.getElementById('modalBackdrop').addEventListener('click', e => { if (e.target.id === 'modalBackdrop') closeModal(); });
@@ -195,20 +195,19 @@ function scanBoxHTML(placeholder = 'Scan barcode / ISBN, press Enter', camera = 
   return `<div class="cart-item barcode-scan-row" style="margin-bottom:10px">
     <span style="font-size:12px;color:#8a5a1f;white-space:nowrap">Barcode scan</span>
     <input id="scanStripInput" placeholder="${esc(placeholder)}" autocomplete="off" style="flex:1;font-family:Consolas,monospace">
-    ${camera ? '<button id="scanBoxCameraToggle" class="action" type="button" onclick="cameraScan(scanCameraHandler, \'scanBoxCameraToggle\')">Camera scan</button>' : ''}
-  </div>${camera ? '<video id="scanCam" hidden playsinline muted></video>' : ''}`;
+    ${camera ? '<button id="scanBoxCameraToggle" class="action" type="button" onclick="openScannerHere()">Scan with camera</button>' : ''}
+  </div>`;
 }
 
 function bindScan(onScan, onInput, keepFocus = true) {
   const input = document.getElementById('scanStripInput');
   if (!input) return;
   const handleCode = async code => {
-    try {
-      const b = await api('/api/books/lookup/' + encodeURIComponent(code));
-      scanDb.set('last', b);
-      onScan(b);
-      toast(b.title + ' matched', 'success');
-    } catch (err) { toast(err.message, 'error'); }
+    const b = await api('/api/books/lookup/' + encodeURIComponent(code));
+    scanDb.set('last', b);
+    onScan(b);
+    toast(b.title + ' matched', 'success');
+    return b.title + ' matched';
   };
   scanCameraHandler = handleCode;
   input.focus();
@@ -217,7 +216,7 @@ function bindScan(onScan, onInput, keepFocus = true) {
     const code = input.value.trim();
     input.value = '';
     if (!code) return;
-    await handleCode(code);
+    try { await handleCode(code); } catch (err) { toast(err.message, 'error'); }
     if (keepFocus) input.focus();
   });
   if (onInput) input.addEventListener('input', () => onInput(input.value));
@@ -748,7 +747,7 @@ async function pos() {
       <div class="toolbar pos-scan-toolbar" id="scanBox">
         ${isDistributor ? `<span class="billing-location">Billing zone: <strong>${esc(billingLocation.name)}</strong></span>` : `<select id="billLoc" style="max-width:220px">${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`}
         <input id="scanInput" placeholder="Scan / type barcode or ISBN, press Enter" style="flex:1" onkeydown="if(event.key==='Enter')doScan(this.value)">
-        <button id="cameraToggle" class="primary" onclick="cameraScan()">Camera scan</button>
+        <button id="cameraToggle" class="primary" onclick="openScannerPOS()">Scan with camera</button>
         <button class="action" onclick="invoiceList()">Invoice history</button>
         <select id="manualBook" onchange="posAddBySelect(this.value)" style="max-width:260px">
           <option value="">&mdash; manual search &mdash;</option>
@@ -777,8 +776,7 @@ async function pos() {
         <div><strong>Total:</strong> <span id="cartTotal">&#8377;0.00</span></div>
         <button class="primary" onclick="checkout()">Checkout</button>
       </div>
-    </div>
-    <video id="scanCam" hidden playsinline muted></video>`;
+    </div>`;
   renderCart();
   toggleUpiQr();
   document.getElementById('scanInput').focus();
@@ -805,16 +803,21 @@ function posAddBySelect(val) {
   })();
 }
 
-async function doScan(code) {
+async function doScan(code, opts = {}) {
   const c = document.getElementById('scanInput');
-  c.value = '';
+  if (c) c.value = '';
   if (!code) return;
   try {
     const b = await api('/api/books/lookup/' + encodeURIComponent(code.trim()));
     addToCart(b);
     toast(b.title + ' added', 'success');
-  } catch (e) { toast(e.message, 'error'); }
-  c.focus();
+    if (c) c.focus();
+    return b.title + ' added';
+  } catch (e) {
+    if (!opts.rethrow) toast(e.message, 'error');
+    if (c) c.focus();
+    if (opts.rethrow) throw e;
+  }
 }
 
 function setCartQty(i, v) { state.cart[i].qty = Math.max(1, Number(v) || 1); renderCart(); }
@@ -839,9 +842,329 @@ function renderCart() {
   document.getElementById('cartTotal').innerHTML = `&#8377;${total.toFixed(2)}`;
 }
 
-let scanStream = null, detectLoop = null, scanControls = null, zxingLoadPromise = null;
-let cameraScanSession = 0, cameraStarting = false;
-let activeCameraButtonId = 'cameraToggle';
+let zxingLoadPromise = null;
+
+const SCAN_FORMATS = [
+  'qr_code', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93',
+  'itf', 'codabar', 'data_matrix', 'pdf417', 'aztec',
+];
+
+const scanner = {
+  session: 0, stream: null, detector: null, reader: null, canvas: null, timer: null,
+  open: false, facing: 'environment', torch: false, lastCode: '', lastAt: 0,
+  onResult: null, continuous: false, hits: 0, nativeMissing: false, playing: false,
+};
+
+function scannerEl(id) { return document.getElementById(id); }
+
+function scannerStatus(text, kind = '') {
+  const el = scannerEl('scanStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'scanner-status' + (kind ? ' ' + kind : '');
+}
+
+let scanAudioCtx = null;
+
+function scanBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) {
+      if (!scanAudioCtx) scanAudioCtx = new Ctx();
+      if (scanAudioCtx.state === 'suspended') scanAudioCtx.resume().catch(() => {});
+      const osc = scanAudioCtx.createOscillator();
+      const gain = scanAudioCtx.createGain();
+      const t = scanAudioCtx.currentTime;
+      osc.type = 'sine';
+      osc.frequency.value = 1150;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.2, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+      osc.connect(gain).connect(scanAudioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.14);
+    }
+  } catch (e) { /* sound is a bonus, never a requirement */ }
+  if (navigator.vibrate) navigator.vibrate(45);
+}
+
+function scannerVideoEl() { return scannerEl('scanVideo'); }
+
+function scannerTrack() {
+  return scanner.stream ? (scanner.stream.getVideoTracks()[0] || null) : null;
+}
+
+async function scannerBuildDetector() {
+  if (scanner.nativeMissing || !('BarcodeDetector' in window)) { scanner.nativeMissing = true; return null; }
+  try {
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const formats = SCAN_FORMATS.filter(f => supported.includes(f));
+    if (!formats.length) { scanner.nativeMissing = true; return null; }
+    return new BarcodeDetector({ formats });
+  } catch (e) {
+    scanner.nativeMissing = true;
+    return null;
+  }
+}
+
+function scannerBuildReader() {
+  if (scanner.reader || !window.ZXingBrowser?.BrowserMultiFormatReader) return scanner.reader;
+  let hints;
+  const Z = window.ZXing;
+  if (Z?.DecodeHintType) {
+    hints = new Map();
+    hints.set(Z.DecodeHintType.TRY_HARDER, true);
+    if (Z.BarcodeFormat) {
+      const picks = ['QR_CODE', 'EAN_13', 'EAN_8', 'UPC_A', 'UPC_E', 'CODE_128', 'CODE_39', 'ITF',
+        'DATA_MATRIX', 'PDF_417', 'AZTEC', 'CODABAR']
+        .map(name => Z.BarcodeFormat[name]).filter(Boolean);
+      if (picks.length) hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, picks);
+    }
+  }
+  scanner.reader = new ZXingBrowser.BrowserMultiFormatReader(hints);
+  return scanner.reader;
+}
+
+async function scannerDecodeFrameZxing(video) {
+  const reader = scannerBuildReader();
+  if (!reader || !video.videoWidth || !video.videoHeight) return null;
+  if (!scanner.canvas) scanner.canvas = document.createElement('canvas');
+  const canvas = scanner.canvas;
+  const scale = Math.min(1, 1280 / video.videoWidth);
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext('2d', { willReadFrequently: true })
+    .drawImage(video, 0, 0, canvas.width, canvas.height);
+  const result = await reader.decodeFromCanvas(canvas);
+  return result?.getText?.() || null;
+}
+
+function scannerLoop(session) {
+  clearTimeout(scanner.timer);
+  const step = async () => {
+    if (!scanner.open || session !== scanner.session) return;
+    const video = scannerVideoEl();
+    if (video && video.readyState >= 2) {
+      let code = null;
+      try {
+        if (scanner.detector) {
+          const found = await scanner.detector.detect(video);
+          if (found.length) code = found[0].rawValue;
+        } else {
+          code = await scannerDecodeFrameZxing(video);
+        }
+      } catch (e) { /* an unreadable frame is the normal case */ }
+      if (code && scanner.open && session === scanner.session) scannerHit(code);
+    }
+    if (!scanner.open || session !== scanner.session) return;
+    scanner.timer = setTimeout(step, scanner.detector ? 120 : 240);
+  };
+  step();
+}
+
+async function scannerHit(code) {
+  const value = String(code || '').trim();
+  if (!value) return;
+  const now = Date.now();
+  // The camera keeps seeing the same code while it is held up: staying on a
+  // repeat should not re-add the book. Only accept the code again once it has
+  // been out of view for a moment (or a different code was scanned in between).
+  if (value === scanner.lastCode && now - scanner.lastAt < 1200) {
+    scanner.lastAt = now;
+    return;
+  }
+  scanner.lastCode = value;
+  scanner.lastAt = now;
+  scanBeep();
+  const cb = scanner.onResult;
+  if (scanner.continuous) {
+    scanner.hits += 1;
+    const tag = scannerEl('scanCount');
+    if (tag) { tag.hidden = false; tag.textContent = `${scanner.hits} scanned`; }
+    scannerStatus(`${value}`, 'ok');
+    if (cb) {
+      try {
+        const message = await cb(value);
+        if (message) scannerStatus(`\u2713 ${message}`, 'ok');
+      } catch (e) {
+        scannerStatus(e.message || 'Not found', 'error');
+      }
+    }
+    return;
+  }
+  scannerStop();
+  closeModal();
+  if (cb) {
+    try { await cb(value); } catch (e) { toast(e.message || 'Scan failed', 'error'); }
+  }
+}
+
+function scannerCameraError(err) {
+  const name = err?.name || '';
+  if (name === 'NotAllowedError') return 'Camera permission blocked. Allow it from the address bar, or type the code instead.';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'No camera found on this device. Type the code instead.';
+  if (name === 'NotReadableError') return 'The camera is busy in another app. Close it and try again.';
+  return 'Camera unavailable: ' + (err?.message || err);
+}
+
+async function scannerRefreshControls() {
+  const torchBtn = scannerEl('scanTorch');
+  if (torchBtn) {
+    const caps = scannerTrack()?.getCapabilities?.() || {};
+    torchBtn.hidden = !caps.torch;
+    torchBtn.textContent = scanner.torch ? 'Torch off' : 'Torch on';
+  }
+  const flipBtn = scannerEl('scanFlip');
+  if (flipBtn) {
+    try {
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      flipBtn.hidden = cams.length < 2;
+    } catch (e) {
+      flipBtn.hidden = true;
+    }
+  }
+}
+
+async function scannerStartCamera() {
+  const session = ++scanner.session;
+  const video = scannerVideoEl();
+  if (!video) return;
+  scannerStatus('Starting camera\u2026');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: scanner.facing },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 },
+        advanced: [{ focusMode: 'continuous' }],
+      },
+    });
+    if (!scanner.open || session !== scanner.session) { stream.getTracks().forEach(t => t.stop()); return; }
+    scanner.stream = stream;
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    scanner.playing = true;
+    scannerRefreshControls();
+    scannerStatus(scanner.continuous
+      ? 'Camera stays on \u2014 scan each item in turn.'
+      : 'Point the camera at the barcode or QR code.');
+    scannerLoop(session);
+  } catch (err) {
+    scannerStatus(scannerCameraError(err), 'error');
+  }
+}
+
+async function scannerToggleTorch() {
+  const track = scannerTrack();
+  if (!track) return;
+  try {
+    scanner.torch = !scanner.torch;
+    await track.applyConstraints({ advanced: [{ torch: scanner.torch }] });
+    scannerRefreshControls();
+  } catch (e) {
+    scanner.torch = false;
+    toast('Torch is not available on this camera', 'error');
+  }
+}
+
+async function scannerFlip() {
+  if (!scanner.open) return;
+  scanner.facing = scanner.facing === 'environment' ? 'user' : 'environment';
+  scanner.session++;
+  clearTimeout(scanner.timer);
+  scanner.timer = null;
+  if (scanner.stream) { scanner.stream.getTracks().forEach(t => t.stop()); scanner.stream = null; }
+  scanner.torch = false;
+  const video = scannerVideoEl();
+  if (video) video.srcObject = null;
+  await scannerStartCamera();
+}
+
+async function scannerDecodeFile(file) {
+  if (!file) return;
+  scannerStatus('Reading image\u2026');
+  let code = null;
+  const url = URL.createObjectURL(file);
+  try {
+    const det = scanner.detector || await scannerBuildDetector();
+    if (det && window.createImageBitmap) {
+      try {
+        const bitmap = await createImageBitmap(file);
+        const found = await det.detect(bitmap);
+        if (found.length) code = found[0].rawValue;
+        if (bitmap.close) bitmap.close();
+      } catch (e) { /* fall back to ZXing below */ }
+    }
+    if (!code) {
+      await loadZXing();
+      const result = await scannerBuildReader().decodeFromImageUrl(url);
+      code = result?.getText?.() || null;
+    }
+  } catch (e) {
+    code = null;
+  } finally {
+    URL.revokeObjectURL(url);
+    const input = scannerEl('scanFile');
+    if (input) input.value = '';
+  }
+  if (!scanner.open) return;
+  if (code) scannerHit(code);
+  else scannerStatus('No barcode found in that image. Try a sharper, closer photo.', 'error');
+}
+
+async function openScanner({ onResult = null, continuous = false } = {}) {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    toast('Camera scanning needs HTTPS and camera permission. Type the code instead.', 'error');
+    return;
+  }
+  openModal(`
+    <h3>Scan barcode or QR</h3>
+    <div class="scanner">
+      <div class="scanner-stage">
+        <video id="scanVideo" playsinline muted autoplay></video>
+        <div class="scanner-frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="scanner-laser" aria-hidden="true"></div>
+        ${continuous ? '<span class="scanner-count" id="scanCount" hidden></span>' : ''}
+      </div>
+      <p class="scanner-status" id="scanStatus">Starting camera\u2026</p>
+      <div class="scanner-actions">
+        <button id="scanTorch" class="action" type="button" hidden>Torch on</button>
+        <button id="scanFlip" class="action" type="button" hidden>Switch camera</button>
+        <label class="action scanner-file">Upload image<input id="scanFile" type="file" accept="image/*" hidden></label>
+        <button id="scanClose" class="primary" type="button">Done</button>
+      </div>
+      <p class="hint">No camera? Close this and type the code in the scan field.</p>
+    </div>`);
+  scanner.open = true;
+  scanner.session++;
+  scanner.continuous = continuous;
+  scanner.onResult = onResult;
+  scanner.hits = 0;
+  scanner.torch = false;
+  scanner.lastCode = '';
+  scanner.lastAt = 0;
+  scanner.detector = null;
+  scanner.reader = null;
+  scannerEl('scanTorch').addEventListener('click', scannerToggleTorch);
+  scannerEl('scanFlip').addEventListener('click', scannerFlip);
+  scannerEl('scanClose').addEventListener('click', () => closeModal());
+  scannerEl('scanFile').addEventListener('change', e => scannerDecodeFile(e.target.files?.[0]));
+  scanner.detector = await scannerBuildDetector();
+  if (!scanner.open) return;
+  if (!scanner.detector) loadZXing().catch(() => {});
+  await scannerStartCamera();
+}
+
+function openScannerHere() {
+  const handler = scanCameraHandler;
+  openScanner({ onResult: handler ? code => handler(code) : null });
+}
+
+function openScannerPOS() {
+  openScanner({ continuous: true, onResult: code => doScan(code, { rethrow: true }) });
+}
 
 async function loadZXing() {
   if (window.ZXingBrowser?.BrowserMultiFormatReader) return;
@@ -864,108 +1187,38 @@ async function loadZXing() {
   await zxingLoadPromise;
 }
 
-async function cameraScan(onScan = null, buttonId = 'cameraToggle') {
-  const vid = document.getElementById('scanCam');
-  if (!vid) return;
-  if (cameraStarting || scanStream || scanControls) { stopCam(); return; }
-  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    toast('Camera scanning requires HTTPS and browser camera permission. Use barcode input if unavailable.', 'error');
-    return;
+function scannerPause() {
+  clearTimeout(scanner.timer);
+  scanner.timer = null;
+  if (scanner.stream) {
+    scanner.stream.getTracks().forEach(t => t.stop());
+    scanner.stream = null;
   }
-  const button = document.getElementById(buttonId);
-  if (!button) return;
-  activeCameraButtonId = buttonId;
-  const session = ++cameraScanSession;
-  cameraStarting = true;
-  button.textContent = 'Starting camera...';
-  const handleScan = onScan || (buttonId === 'cameraToggle' ? doScan : scanCameraHandler);
-  if (!handleScan) {
-    cameraStarting = false;
-    button.textContent = 'Camera scan';
-    toast('Barcode scan is not ready. Please try again.', 'error');
-    return;
-  }
-  try {
-    vid.hidden = false;
-    if (window.BarcodeDetector && typeof BarcodeDetector.getSupportedFormats === 'function') {
-      const supported = await BarcodeDetector.getSupportedFormats();
-      const formats = ['ean_13', 'ean_8', 'code_128', 'upc_a', 'upc_e']
-        .filter(format => supported.includes(format));
-      if (formats.length) {
-        const det = new BarcodeDetector({ formats });
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        if (session !== cameraScanSession) { stream.getTracks().forEach(track => track.stop()); return; }
-        scanStream = stream;
-        vid.srcObject = stream;
-        await vid.play();
-        if (session !== cameraScanSession) {
-          stream.getTracks().forEach(track => track.stop());
-          if (scanStream === stream) scanStream = null;
-          return;
-        }
-        button.textContent = 'Stop camera';
-        let detecting = false;
-        detectLoop = setInterval(async () => {
-          if (detecting) return;
-          detecting = true;
-          try {
-            const codes = await det.detect(vid);
-            if (codes.length && codes[0].rawValue) {
-              const code = codes[0].rawValue;
-              stopCam();
-              await handleScan(code);
-            }
-          } catch (e) {
-            stopCam();
-            toast('Barcode detection failed: ' + e.message, 'error');
-          } finally { detecting = false; }
-        }, 400);
-        return;
-      }
-    }
-    await loadZXing();
-    if (session !== cameraScanSession) return;
-    const reader = new ZXingBrowser.BrowserMultiFormatReader();
-    let scanned = false;
-    const controls = await reader.decodeFromConstraints(
-      { video: { facingMode: { ideal: 'environment' } } },
-      vid,
-      (result, error, controls) => {
-        if (result) {
-          if (session !== cameraScanSession) { controls?.stop(); return; }
-          scanned = true;
-          const code = result.getText();
-          if (controls) controls.stop();
-          scanControls = null;
-          vid.hidden = true;
-          button.textContent = 'Camera scan';
-          void handleScan(code);
-        }
-      },
-    );
-    if (session !== cameraScanSession) { controls.stop(); return; }
-    scanControls = scanned ? null : controls;
-    if (!scanned) button.textContent = 'Stop camera';
-  } catch (e) {
-    if (session === cameraScanSession) {
-      stopCam();
-      toast('Camera unavailable: ' + e.message, 'error');
-    }
-  } finally {
-    if (session === cameraScanSession) cameraStarting = false;
-  }
+  const video = scannerVideoEl();
+  if (video) video.srcObject = null;
 }
 
-function stopCam() {
-  cameraScanSession++;
-  cameraStarting = false;
-  clearInterval(detectLoop); detectLoop = null;
-  if (scanControls) { scanControls.stop(); scanControls = null; }
-  if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
-  const vid = document.getElementById('scanCam'); if (vid) vid.hidden = true;
-  const btn = document.getElementById(activeCameraButtonId); if (btn) btn.textContent = 'Camera scan';
-  activeCameraButtonId = 'cameraToggle';
+function scannerStop() {
+  scanner.open = false;
+  scanner.session++;
+  scannerPause();
+  scanner.torch = false;
+  scanner.playing = false;
 }
+
+function stopCam() { scannerStop(); }
+
+// Phones and laptops can hold the camera open when the tab goes away; release
+// it while the page is hidden and resume the preview when it comes back.
+document.addEventListener('visibilitychange', () => {
+  if (!scanner.open) return;
+  if (document.hidden) {
+    scanner.session++;
+    scannerPause();
+  } else if (scanner.playing) {
+    scannerStartCamera();
+  }
+});
 
 async function checkout() {
   if (!state.cart.length) { toast('Cart is empty', 'error'); return; }

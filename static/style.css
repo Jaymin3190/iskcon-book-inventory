@@ -319,8 +319,54 @@ tr:hover td { background: #fbf7ec; }
 .kbd { background: #eee4cf; border: 1px solid #d8c9a8; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 
 #scanBox input { font-family: Consolas, monospace; }
-#scanCam { display: block; width: 100%; max-height: 50vh; margin-top: 12px; border-radius: 8px; background: #211b12; object-fit: contain; }
-#scanCam[hidden] { display: none; }
+
+/* Camera scanner modal */
+.scanner { display: grid; gap: 10px; }
+.scanner-stage {
+  position: relative; width: 100%; max-height: 50vh; aspect-ratio: 4 / 3;
+  border-radius: 12px; overflow: hidden; background: #191410;
+}
+.scanner-stage video {
+  display: block; width: 100%; height: 100%; object-fit: cover; background: #191410;
+}
+.scanner-frame { position: absolute; inset: 13%; pointer-events: none; }
+.scanner-frame i {
+  position: absolute; width: 34px; height: 34px; border: 3px solid #ffd27a;
+  border-radius: 7px;
+}
+.scanner-frame i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+.scanner-frame i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+.scanner-frame i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+.scanner-frame i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+.scanner-laser {
+  position: absolute; left: 14%; right: 14%; height: 2px; top: 15%;
+  background: linear-gradient(90deg, transparent, #ffd27a, transparent);
+  box-shadow: 0 0 14px rgba(255, 210, 122, .85);
+  animation: scannerSweep 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes scannerSweep {
+  0%, 100% { top: 15%; opacity: .3; }
+  50% { top: 84%; opacity: 1; }
+}
+.scanner-count {
+  position: absolute; top: 10px; left: 10px; padding: 3px 10px; border-radius: 99px;
+  background: rgba(25, 20, 16, .72); color: #ffe9c7; font-size: 12px; font-weight: 600;
+}
+.scanner-status { margin: 0; min-height: 20px; font-size: 13px; color: #6b5a3a; overflow-wrap: anywhere; }
+.scanner-status.ok { color: #2e6b32; font-weight: 600; }
+.scanner-status.error { color: #b3261e; font-weight: 600; }
+.scanner-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.scanner-actions #scanClose { margin-left: auto; }
+.scanner-actions label.scanner-file {
+  display: inline-flex; align-items: center; background: #fff; border: 1px solid #8a5a1f;
+  color: #8a5a1f; padding: 4px 10px; border-radius: 5px; font-size: 12px; cursor: pointer;
+}
+.scanner-actions label.scanner-file:hover { background: #f5efe2; }
+.scanner .hint { margin: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .scanner-laser { animation: none; top: 50%; opacity: .8; }
+}
 .billing-location { padding: 8px 10px; color: #6b5a3a; font-size: 13px; }
 tr.hl td { background: #fff3cd !important; }
 .hint { color: #8a6d3b; font-size: 12px; margin-bottom: 10px; }
