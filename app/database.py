@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('super_admin','zone_admin','distributor','temple')),
     zone_id INTEGER REFERENCES locations(id),
-    location_id INTEGER REFERENCES locations(id),
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -184,10 +183,46 @@ def get_db():
         conn.close()
 
 
+def _migrate_users_zone_only(conn):
+    """Give every user a zone and retire users.location_id.
+
+    A temple user used to point at a single store or the warehouse. Zones are
+    the unit of stock scoping for every other role, so the old location is
+    translated to the zone that contains it before the column is removed.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    if "location_id" not in columns:
+        return
+    conn.execute(
+        """
+        UPDATE users SET zone_id = COALESCE(
+            zone_id,
+            (SELECT CASE WHEN l.type = 'zone' THEN l.id ELSE l.parent_id END
+               FROM locations l WHERE l.id = users.location_id),
+            (SELECT id FROM locations WHERE code = 'TZ'),
+            (SELECT z.id FROM locations z
+              WHERE z.type = 'zone' AND z.parent_id = users.location_id
+              ORDER BY z.id LIMIT 1)
+        )
+        WHERE location_id IS NOT NULL
+        """
+    )
+    conn.execute("UPDATE users SET location_id = NULL")
+    conn.execute(
+        "UPDATE locations SET name = 'templeZone' WHERE code = 'TZ' AND name = 'Temple Zone'"
+    )
+    try:
+        conn.execute("ALTER TABLE users DROP COLUMN location_id")
+    except sqlite3.OperationalError:
+        # Older SQLite cannot drop a column; leaving it unused is harmless.
+        pass
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    _migrate_users_zone_only(conn)
     conn.commit()
     conn.close()

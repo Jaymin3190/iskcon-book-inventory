@@ -5,7 +5,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..auth import require_roles
+from ..auth import has_role, require_roles
 from ..database import get_db
 from ..services.audit import log_audit
 from ..services.ledger import check_available, ensure_stock, move_stock
@@ -17,7 +17,7 @@ DAMAGED_REASON_CODES = ("DAMAGED", "STAINED", "MISSING_PAGES", "PRINT_ERROR", "O
 
 
 @router.get("")
-def current_stock(location_id: int = None, book_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+def current_stock(location_id: int = None, book_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT s.book_id, s.location_id, s.qty, s.updated_at,
                     b.title, b.barcode, b.isbn, b.price, b.publication,
@@ -77,8 +77,6 @@ def adjust_stock(data: StockAdjustIn, db=Depends(get_db), user=Depends(require_r
     ).fetchone()
     if not location or location["type"] != "warehouse" or location["parent_id"] is not None:
         raise HTTPException(403, "Manual stock adjustments are only allowed at the warehouse; use a transfer to assign stock to a zone")
-    if user["role"] == "temple" and user["location_id"] != data.location_id:
-        raise HTTPException(403, "You can only adjust stock at your assigned warehouse")
     book = db.execute("SELECT * FROM books WHERE id = ?", (data.book_id,)).fetchone()
     if not book:
         raise HTTPException(404, "Book not found")
@@ -305,7 +303,7 @@ def approve_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_
         raise HTTPException(404, "Transfer not found")
     if t["status"] != "requested":
         raise HTTPException(400, f"Cannot approve transfer in status '{t['status']}'")
-    if user["role"] == "zone_admin" and not (can_view(db, user, t["from_location_id"]) or can_view(db, user, t["to_location_id"])):
+    if has_role(user, "zone_admin") and not (can_view(db, user, t["from_location_id"]) or can_view(db, user, t["to_location_id"])):
         raise HTTPException(403, "Forbidden")
     db.execute(
         "UPDATE transfers SET status = 'approved', approved_by = ?, approved_at = datetime('now') WHERE id = ?",
@@ -323,7 +321,7 @@ def reject_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_r
         raise HTTPException(404, "Transfer not found")
     if t["status"] != "requested":
         raise HTTPException(400, f"Cannot reject transfer in status '{t['status']}'")
-    if user["role"] == "zone_admin" and not (can_view(db, user, t["from_location_id"]) or can_view(db, user, t["to_location_id"])):
+    if has_role(user, "zone_admin") and not (can_view(db, user, t["from_location_id"]) or can_view(db, user, t["to_location_id"])):
         raise HTTPException(403, "Forbidden")
     db.execute("UPDATE transfers SET status = 'rejected' WHERE id = ?", (transfer_id,))
     db.commit()
@@ -375,10 +373,7 @@ def receive_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_
         raise HTTPException(404, "Transfer not found")
     if t["status"] != "dispatched":
         raise HTTPException(400, f"Cannot receive transfer in status '{t['status']}'")
-    if user["role"] not in ("super_admin",) and not (
-        (user["role"] == "temple" and user["location_id"] == t["to_location_id"])
-        or (user["role"] == "zone_admin" and can_view(db, user, t["to_location_id"]))
-    ):
+    if user["role"] != "super_admin" and not can_view(db, user, t["to_location_id"]):
         raise HTTPException(403, "Forbidden")
     items = db.execute("SELECT * FROM transfer_items WHERE transfer_id = ?", (transfer_id,)).fetchall()
     for it in items:

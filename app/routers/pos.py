@@ -43,7 +43,6 @@ def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", 
              WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
     params = list(ids)
     if user["role"] == "distributor":
-        # A distributor only works their own bills; the zone admin sees the zone.
         sql += " AND i.cashier_id = ?"
         params.append(user["id"])
     sql += " ORDER BY i.id DESC"
@@ -56,13 +55,13 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(400, "Cart is empty")
     if data.payment_mode not in PAYMENT_MODES:
         raise HTTPException(400, f"Invalid payment mode. Valid: {', '.join(PAYMENT_MODES)}")
-    if user["role"] == "distributor":
+    if user["role"] != "super_admin":
         loc_id = user["zone_id"]
         if not loc_id or (data.location_id is not None and data.location_id != loc_id):
-            raise HTTPException(403, "Distributors can only bill against their assigned zone")
+            raise HTTPException(403, "Users can only bill against their assigned zone")
     else:
-        loc_id = data.location_id or user["location_id"] or user["zone_id"]
-        if not loc_id and user["role"] == "super_admin":
+        loc_id = data.location_id or user["zone_id"]
+        if not loc_id:
             warehouse = db.execute(
                 "SELECT id FROM locations WHERE type = 'warehouse' AND parent_id IS NULL ORDER BY id LIMIT 1"
             ).fetchone()
@@ -127,7 +126,7 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
     if inv["location_id"] not in location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
-        raise HTTPException(403, "Distributors can only open their own bills")
+        raise HTTPException(403, "Distributors can only access their own bills")
     items = db.execute(
         """SELECT ii.*, b.title, b.barcode
            FROM invoice_items ii JOIN books b ON b.id = ii.book_id
@@ -191,7 +190,7 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
     if inv["location_id"] not in location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
-        raise HTTPException(403, "Distributors can only open their own bills")
+        raise HTTPException(403, "Distributors can only access their own bills")
     items = db.execute(
         """SELECT ii.*, b.title, b.barcode
            FROM invoice_items ii JOIN books b ON b.id = ii.book_id
@@ -203,13 +202,15 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
 
 @router.delete("/invoices/{invoice_id}")
 def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+    if user["role"] == "distributor":
+        raise HTTPException(403, "Distributors cannot delete invoices")
     inv = db.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
     if inv["location_id"] not in location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
-        raise HTTPException(403, "Distributors can only open their own bills")
+        raise HTTPException(403, "Distributors can only access their own bills")
     items = db.execute(
         "SELECT * FROM invoice_items WHERE invoice_id = ?",
         (invoice_id,),

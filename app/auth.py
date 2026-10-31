@@ -73,9 +73,8 @@ def get_current_user(request: Request, db=Depends(get_db)):
     if not data:
         raise HTTPException(401, "Invalid or expired token")
     user = db.execute(
-        """SELECT u.*, l.name AS location_name, z.name AS zone_name
+        """SELECT u.*, z.name AS zone_name
            FROM users u
-           LEFT JOIN locations l ON u.location_id = l.id
            LEFT JOIN locations z ON u.zone_id = z.id
            WHERE u.id = ?""",
         (data["sub"],),
@@ -85,9 +84,13 @@ def get_current_user(request: Request, db=Depends(get_db)):
     return user
 
 
+def has_role(user, role: str) -> bool:
+    return user["role"] == role
+
+
 def require_roles(*roles):
     def dep(user=Depends(get_current_user)):
-        if user["role"] not in roles:
+        if not any(has_role(user, role) for role in roles):
             raise HTTPException(403, "Forbidden")
         return user
     return dep
@@ -101,7 +104,5 @@ def public_user(user) -> dict:
         "role": user["role"],
         "zone_id": user["zone_id"],
         "zone_name": user["zone_name"],
-        "location_id": user["location_id"],
-        "location_name": user["location_name"],
         "is_active": user["is_active"],
     }

@@ -67,11 +67,13 @@ check("publication field = BBT", book["publication"] == "Bhaktivedanta Book Trus
 check("no author/category fields", "author" not in book and "category" not in book)
 
 _, stock = call("GET", "/api/stock", token=temple_t)
-check("temple admin sees only temple", all(s["location_id"] == 1 for s in stock) and len(stock) == 10)
-check("temple has 10 each", all(s["qty"] == 10 for s in stock))
+check("temple admin sees warehouse + its zone",
+      {s["location_id"] for s in stock} == {1, 2} and len(stock) == 20)
+check("temple has 10 each at the warehouse",
+      all(s["qty"] == 10 for s in stock if s["location_id"] == 1))
 
 _, locs = call("GET", "/api/locations", token=temple_t)
-check("temple scoped locations", {l["id"] for l in locs} == {1})
+check("temple scoped locations", {l["id"] for l in locs} == {1, 2})
 
 _, locs = call("GET", "/api/locations", token=zone_t)
 check("zone leader sees zone + temple", {l["id"] for l in locs} == {1, 2})
@@ -79,7 +81,7 @@ check("zone leader sees one assigned zone", sum(1 for l in locs if l["type"] == 
 
 _, all_locs = call("GET", "/api/locations", token=super_t)
 zone_names = [l["name"] for l in all_locs if l["type"] == "zone"]
-check("zones named correctly", set(zone_names) == {"Temple Zone", "Niradhar Ashram", "Gokul Nagar", "Patel Park", "Base Students", "Reliance Group"})
+check("zones named correctly", set(zone_names) == {"templeZone", "Niradhar Ashram", "Gokul Nagar", "Patel Park", "Base Students", "Reliance Group"})
 _, zone_stock = call("GET", "/api/stock?location_id=2", token=super_t)
 check("zones start at zero", all(s["qty"] == 0 for s in zone_stock))
 _, stock_summary = call("GET", "/api/reports/stock-summary", token=super_t)
@@ -96,22 +98,23 @@ check("super admin can bill without an assigned location", code == 200 and admin
 # --- transfer: zone leader self-service from temple ---
 code, tr = call("POST", "/api/stock/transfers", token=zone_t, body={
     "from_location_id": 1, "to_location_id": 2, "note": None,
-    "items": [{"book_id": 1, "qty": 5}, {"book_id": 5, "qty": 10}, {"book_id": 7, "qty": 4}],
+    "items": [{"book_id": 1, "qty": 5}, {"book_id": 2, "qty": 10},
+              {"book_id": 5, "qty": 10}, {"book_id": 7, "qty": 4}],
 })
 check("zone leader requests transfer", code == 200 and tr["status"] == "requested", tr)
 tid = tr["id"]
 
 code, _ = call("POST", f"/api/stock/transfers/{tid}/approve", token=temple_t)
-check("temple admin cannot approve (RBAC)", code == 403)
+check("temple user cannot approve transfers", code == 403)
 
 code, _ = call("POST", f"/api/stock/transfers/{tid}/approve", token=zone_t)
-check("zone leader approves", code == 200)
+check("zone admin approves transfer", code == 200)
 
 code, _ = call("POST", f"/api/stock/transfers/{tid}/dispatch", token=temple_t)
-check("temple admin cannot dispatch (RBAC)", code == 403)
+check("temple user cannot dispatch transfers", code == 403)
 
 code, _ = call("POST", f"/api/stock/transfers/{tid}/dispatch", token=zone_t)
-check("zone leader dispatches", code == 200)
+check("zone admin dispatches transfer", code == 200)
 
 _, ts = call("GET", "/api/stock?location_id=1", token=super_t)
 check("temple stock reduced after dispatch", qty(ts, 1, 1) == 5 and qty(ts, 5, 1) == 0 and qty(ts, 7, 1) == 6)
@@ -120,7 +123,8 @@ code, _ = call("POST", f"/api/stock/transfers/{tid}/receive", token=zone_t)
 check("zone leader receives", code == 200)
 
 _, zs = call("GET", "/api/stock?location_id=2", token=super_t)
-check("zone stock increased after receive", qty(zs, 1, 2) == 5 and qty(zs, 5, 2) == 10 and qty(zs, 7, 2) == 4)
+check("zone stock increased after receive", qty(zs, 1, 2) == 5 and qty(zs, 2, 2) == 10
+      and qty(zs, 5, 2) == 10 and qty(zs, 7, 2) == 4)
 
 code, _ = call("POST", "/api/stock/transfers", token=super_t, body={
     "from_location_id": 2, "to_location_id": 3, "items": [{"book_id": 1, "qty": 1}],
@@ -142,11 +146,11 @@ code, inv = call("POST", "/api/pos/invoices", token=temple_t, body={
     "customer_email": None, "payment_ref": None, "payment_mode": "cash",
     "items": [{"barcode": "9780892132517", "qty": 2}],
 })
-check("temple POS invoice (2 x 450)", code == 200 and inv["total"] == 900.0, inv)
-check("invoice number format", str(inv["invoice_number"]).startswith("INV-TEMPLE-"))
+check("zone-mapped temple POS invoice (2 x 450)", code == 200 and inv["total"] == 900.0, inv)
+check("invoice number uses assigned zone", str(inv["invoice_number"]).startswith("INV-TZ-"))
 
-_, ts = call("GET", "/api/stock?location_id=1", token=super_t)
-check("stock decremented on sale", qty(ts, 2, 1) == 8)
+_, ts = call("GET", "/api/stock?location_id=2", token=super_t)
+check("stock decremented on sale", qty(ts, 2, 2) == 8)
 
 code, _ = call("POST", "/api/pos/invoices", token=temple_t, body={
     "items": [{"barcode": "9780892131343", "qty": 9999}],
@@ -168,6 +172,30 @@ code, led = call("POST", "/api/pos/invoices", token=dist_t, body={
     "items": [{"barcode": "9780892131565", "qty": 4}],
 })
 check("distributor ledger billing at zone", code == 200 and led["total"] == 400.0, led)
+code, dist_invoices = call("GET", "/api/pos/invoices", token=dist_t)
+_, dist_me = call("GET", "/api/auth/me", token=dist_t)
+check("distributor invoice history includes only own bills",
+      code == 200 and any(row["id"] == led["invoice_id"] for row in dist_invoices)
+      and all(row["cashier_id"] == dist_me["user"]["id"] for row in dist_invoices))
+code, _ = call("GET", f"/api/pos/invoices/{inv['invoice_id']}", token=dist_t)
+check("distributor cannot open another user's bill", code == 403)
+code, own_invoice = call("GET", f"/api/pos/invoices/{led['invoice_id']}", token=dist_t)
+check("distributor can open own bill", code == 200 and own_invoice["cashier_id"] == dist_me["user"]["id"])
+code, _ = call("DELETE", f"/api/pos/invoices/{led['invoice_id']}", token=dist_t)
+check("distributor cannot delete bills", code == 403)
+_, distributor_stock = call("GET", "/api/stock", token=dist_t)
+check("distributor sees assigned-zone stock only",
+      {row["location_id"] for row in distributor_stock} == {2})
+_, parent_stock = call("GET", "/api/stock?location_id=1", token=dist_t)
+check("distributor cannot view parent warehouse stock", not parent_stock)
+code, _ = call("GET", "/api/stock/ledger", token=dist_t)
+check("distributor cannot view stock ledger", code == 403)
+code, _ = call("GET", "/api/stock/transfers", token=dist_t)
+check("distributor cannot view transfers", code == 403)
+code, _ = call("GET", "/api/users", token=dist_t)
+check("distributor cannot manage users", code == 403)
+code, _ = call("GET", "/api/reports/sales", token=dist_t)
+check("distributor cannot access sales reports", code == 403)
 
 code, zone_sales = call("GET", "/api/reports/distributor-sales", token=zone_t)
 check("zone leader sees distributor book and payment sales", code == 200 and any(
@@ -183,18 +211,18 @@ check("zone report excludes another zone's distributor sales", code == 200 and a
     row["invoice_number"] != led["invoice_number"] for row in other_zone_sales
 ))
 code, _ = call("GET", "/api/reports/distributor-sales", token=dist_t)
-check("distributor sales report restricted to managers", code == 403)
+check("distributor cannot access distributor sales report", code == 403)
 
 _, inv_detail = call("GET", f"/api/pos/invoices/{inv['invoice_id']}", token=temple_t)
 check("invoice detail has items", len(inv_detail["items"]) == 1)
-check("invoice detail shows cashier display name", inv_detail["cashier_name"] == "Distributor")
+check("invoice detail shows cashier display name", inv_detail["cashier_name"] == "Temple Admin")
 
 req = urllib.request.Request(f"{BASE}/api/pos/invoices/{inv['invoice_id']}/print")
 req.add_header("Authorization", "Bearer " + temple_t)
 with urllib.request.urlopen(req) as resp:
     html_body = resp.read().decode()
 check("printable invoice HTML", "<html" in html_body.lower() or "doctype" in html_body.lower())
-check("printed invoice shows cashier display name", "Cashier: Distributor" in html_body)
+check("printed invoice shows cashier display name", "Cashier: Temple Admin" in html_body)
 
 # --- stock count ---
 code, cnt = call("POST", "/api/stock/counts", token=temple_t, body={"location_id": 1})
@@ -227,13 +255,13 @@ check("invalid reason code rejected", code == 400)
 
 # --- RBAC / scope ---
 code, _ = call("GET", "/api/users", token=temple_t)
-check("temple admin cannot list users", code == 403)
+check("temple user cannot list users", code == 403)
 code, _ = call("POST", "/api/books", token=temple_t, body={"title": "x", "barcode": "1"})
-check("temple admin cannot create books", code == 403)
+check("temple user cannot create books", code == 403)
 code, _ = call("GET", "/api/users", token=zone_t)
 check("zone leader lists scoped users", code == 200)
 code, _ = call("GET", "/api/audit", token=temple_t)
-check("temple admin cannot view audit trail", code == 403)
+check("temple user cannot view audit trail", code == 403)
 code, _ = call("GET", "/api/audit", token=zone_t)
 check("zone leader can view audit trail", code == 200)
 
@@ -339,7 +367,7 @@ check("completed stock count cannot be deleted", code == 409)
 code, transfer_rows = call("GET", "/api/stock/transfers", token=zone_t)
 check("transfer list", code == 200 and any(t["id"] == tid for t in transfer_rows))
 code, transfer_detail = call("GET", f"/api/stock/transfers/{tid}", token=zone_t)
-check("transfer detail includes items", code == 200 and len(transfer_detail["items"]) == 3)
+check("transfer detail includes items", code == 200 and len(transfer_detail["items"]) == 4)
 code, rejected_transfer = call("POST", "/api/stock/transfers", token=zone_t, body={
     "from_location_id": 1, "to_location_id": 2, "items": [{"book_id": 1, "qty": 1}],
 })
@@ -352,19 +380,20 @@ check("rejected transfer can be deleted", code == 200)
 # --- invoice list, delete, and stock restoration ---
 code, invoices = call("GET", "/api/pos/invoices", token=temple_t)
 check("invoice list includes created invoice", code == 200 and any(i["id"] == inv["invoice_id"] for i in invoices))
-_, before_invoice_rows = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
-before_invoice_delete = qty(before_invoice_rows, 1, 1)
+_, before_invoice_rows = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
+before_invoice_delete = qty(before_invoice_rows, 1, 2)
 code, disposable_invoice = call("POST", "/api/pos/invoices", token=temple_t, body={
     "payment_mode": "cash", "items": [{"barcode": "9780892131343", "qty": 1}],
 })
 disposable_invoice_id = disposable_invoice.get("invoice_id")
 code, deletion = call("DELETE", f"/api/pos/invoices/{disposable_invoice_id}", token=temple_t)
 check("invoice deletion restores sold stock", code == 200 and deletion["restocked_lines"] == 1)
-code, restored_stock = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
-check("invoice deletion restores exact quantity", qty(restored_stock, 1, 1) == before_invoice_delete)
+code, restored_stock = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
+check("invoice deletion restores exact quantity", qty(restored_stock, 1, 2) == before_invoice_delete)
 
 # --- return deletion should restore the source stock ---
-before_return_delete = qty(restored_stock, 1, 1)
+_, warehouse_rows = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
+before_return_delete = qty(warehouse_rows, 1, 1)
 code, disposable_return = call("POST", "/api/stock/returns", token=temple_t, body={
     "location_id": 1, "reason": "delete-path test", "items": [{"book_id": 1, "qty": 1}],
 })
@@ -387,26 +416,33 @@ check("deleting damage write-off restores stock", code == 200 and damage_delete[
 # --- user CRUD ---
 code, created_user = call("POST", "/api/users", token=super_t, body={
     "username": "smoke-user", "password": "initial-smoke-password", "name": "Smoke User",
-    "role": "distributor", "zone_id": 2, "location_id": None,
+    "role": "distributor", "zone_id": 2,
 })
 check("user creation", code == 200 and created_user["username"] == "smoke-user")
 test_user_id = created_user.get("id")
 code, temple_user = call("POST", "/api/users", token=super_t, body={
     "username": "smoke-temple-user", "password": "temple-smoke-password", "name": "Smoke Temple User",
-    "role": "temple", "zone_id": None, "location_id": 1,
+    "role": "temple", "zone_id": 2,
 })
-check("temple user creation accepts null zone id", code == 200 and temple_user["username"] == "smoke-temple-user")
+check("temple user creation requires and accepts a zone", code == 200 and temple_user["username"] == "smoke-temple-user")
+code, _ = call("POST", "/api/users", token=super_t, body={
+    "username": "smoke-invalid-zone", "password": "invalid-zone-password", "name": "Invalid Zone User",
+    "role": "temple", "zone_id": 1,
+})
+check("user mapping rejects non-zone locations", code == 400)
 code, admin_user = call("POST", "/api/users", token=super_t, body={
     "username": "smoke-admin-user", "password": "admin-smoke-password", "name": "Smoke Admin User",
-    "role": "super_admin", "zone_id": None, "location_id": None,
+    "role": "super_admin", "zone_id": None,
 })
-check("super admin creation accepts null location ids", code == 200 and admin_user["username"] == "smoke-admin-user")
+check("super admin creation accepts null zone id", code == 200 and admin_user["username"] == "smoke-admin-user")
 code, users = call("GET", "/api/users", token=super_t)
 check("user list excludes password hashes", code == 200 and "password_hash" not in str(users))
 code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={
     "name": "Updated Smoke User", "password": "updated-smoke-password",
 })
 check("user update and password change", code == 200)
+code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={"zone_id": 1})
+check("user update rejects non-zone mappings", code == 400)
 check("updated user password authenticates", bool(login("smoke-user", "updated-smoke-password")))
 code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={"is_active": 0})
 check("user can be disabled", code == 200 and login("smoke-user", "updated-smoke-password") is None)

@@ -87,8 +87,8 @@ def delete_location(location_id: int, db=Depends(get_db), user=Depends(require_r
         if r["n"]:
             raise HTTPException(409, f"Cannot delete: location is referenced in {table.replace('_', ' ')}")
     assigned = db.execute(
-        "SELECT COUNT(*) AS n FROM users WHERE zone_id = ? OR location_id = ?",
-        (location_id, location_id),
+        "SELECT COUNT(*) AS n FROM users WHERE zone_id = ?",
+        (location_id,),
     ).fetchone()["n"]
     if assigned:
         raise HTTPException(409, "Cannot delete: users are assigned to this location")

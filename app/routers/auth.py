@@ -16,9 +16,8 @@ class LoginIn(BaseModel):
 @router.post("/login")
 def login(data: LoginIn, db=Depends(get_db)):
     user = db.execute(
-        """SELECT u.*, l.name AS location_name, z.name AS zone_name
+        """SELECT u.*, z.name AS zone_name
            FROM users u
-           LEFT JOIN locations l ON u.location_id = l.id
            LEFT JOIN locations z ON u.zone_id = z.id
            WHERE u.username = ? AND u.is_active = 1""",
         (data.username,),

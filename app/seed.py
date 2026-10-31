@@ -18,7 +18,7 @@ BOOKS = [
 
 LOCATIONS = [
     ("TEMPLE", "ISKCON Temple", "warehouse", None),
-    ("TZ", "Temple Zone", "zone", 1),
+    ("TZ", "templeZone", "zone", 1),
     ("NA", "Niradhar Ashram", "zone", 1),
     ("GN", "Gokul Nagar", "zone", 1),
     ("PP", "Patel Park", "zone", 1),
@@ -27,15 +27,15 @@ LOCATIONS = [
 ]
 
 USERS = [
-    ("superadmin", "admin123", "Global Super Admin", "super_admin", None, None),
-    ("templeAdmin", "temple123", "Temple Admin", "temple", None, 1),
-    ("leader-temple-zone", "zone123", "Zone Leader - Temple Zone", "zone_admin", 2, None),
-    ("leader-niradhar-ashram", "zone123", "Zone Leader - Niradhar Ashram", "zone_admin", 3, None),
-    ("leader-gokul-nagar", "zone123", "Zone Leader - Gokul Nagar", "zone_admin", 4, None),
-    ("leader-patel-park", "zone123", "Zone Leader - Patel Park", "zone_admin", 5, None),
-    ("leader-base-students", "zone123", "Zone Leader - Base Students", "zone_admin", 6, None),
-    ("leader-reliance-group", "zone123", "Zone Leader - Reliance Group", "zone_admin", 7, None),
-    ("distributor", "dist123", "Distributor", "distributor", 2, None),
+    ("superadmin", "admin123", "Global Super Admin", "super_admin", None),
+    ("templeAdmin", "temple123", "Temple Admin", "temple", 2),
+    ("leader-temple-zone", "zone123", "Zone Leader - Temple Zone", "zone_admin", 2),
+    ("leader-niradhar-ashram", "zone123", "Zone Leader - Niradhar Ashram", "zone_admin", 3),
+    ("leader-gokul-nagar", "zone123", "Zone Leader - Gokul Nagar", "zone_admin", 4),
+    ("leader-patel-park", "zone123", "Zone Leader - Patel Park", "zone_admin", 5),
+    ("leader-base-students", "zone123", "Zone Leader - Base Students", "zone_admin", 6),
+    ("leader-reliance-group", "zone123", "Zone Leader - Reliance Group", "zone_admin", 7),
+    ("distributor", "dist123", "Distributor", "distributor", 2),
 ]
 
 
@@ -59,10 +59,10 @@ def seed():
             (title, isbn, barcode, lang, publication, price),
         )
 
-    for username, pwd, name, role, zone_id, loc_id in USERS:
+    for username, pwd, name, role, zone_id in USERS:
         c.execute(
-            "INSERT INTO users (username, password_hash, name, role, zone_id, location_id) VALUES (?,?,?,?,?,?)",
-            (username, hash_password(pwd), name, role, zone_id, loc_id),
+            "INSERT INTO users (username, password_hash, name, role, zone_id) VALUES (?,?,?,?,?)",
+            (username, hash_password(pwd), name, role, zone_id),
         )
 
     for book_id in range(1, len(BOOKS) + 1):

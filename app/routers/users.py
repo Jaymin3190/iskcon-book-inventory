@@ -18,7 +18,6 @@ class UserIn(BaseModel):
     name: str
     role: str
     zone_id: Optional[int] = None
-    location_id: Optional[int] = None
     is_active: int = 1
 
 
@@ -28,7 +27,6 @@ class UserPatch(BaseModel):
     password: Optional[str] = None
     role: Optional[str] = None
     zone_id: Optional[int] = None
-    location_id: Optional[int] = None
     is_active: Optional[int] = None
 
 
@@ -40,8 +38,6 @@ def sanitize(row) -> dict:
         "role": row["role"],
         "zone_id": row["zone_id"],
         "zone_name": row["zone_name"],
-        "location_id": row["location_id"],
-        "location_name": row["location_name"],
         "is_active": row["is_active"],
         "created_at": row["created_at"],
     }
@@ -49,9 +45,8 @@ def sanitize(row) -> dict:
 
 @router.get("")
 def list_users(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
-    base = """SELECT u.*, l.name AS location_name, z.name AS zone_name
+    base = """SELECT u.*, z.name AS zone_name
               FROM users u
-              LEFT JOIN locations l ON u.location_id = l.id
               LEFT JOIN locations z ON u.zone_id = z.id"""
     if user["role"] == "super_admin":
         rows = db.execute(base + " ORDER BY u.id").fetchall()
@@ -69,6 +64,13 @@ def clean_username(value: str) -> str:
     return username
 
 
+def validate_zone(db, zone_id: Optional[int]) -> None:
+    if not zone_id or not db.execute(
+        "SELECT id FROM locations WHERE id = ? AND type = 'zone'", (zone_id,)
+    ).fetchone():
+        raise HTTPException(400, "A valid zone is required for every role except super admin")
+
+
 @router.post("")
 def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
     if data.role not in VALID_ROLES:
@@ -78,17 +80,17 @@ def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("su
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
     username = clean_username(data.username)
-    if data.role == "temple" and not data.location_id:
-        raise HTTPException(400, "location_id is required for temple users")
-    if data.role in ("zone_admin", "distributor") and not data.zone_id:
-        raise HTTPException(400, "zone_id is required for zone_admin/distributor users")
+    if data.role != "super_admin" and not data.zone_id:
+        raise HTTPException(400, "A zone is required for every role except super admin")
+    if data.role != "super_admin":
+        validate_zone(db, data.zone_id)
     existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
     if existing:
         raise HTTPException(409, "Username already exists")
     cur = db.execute(
-        """INSERT INTO users (username, password_hash, name, role, zone_id, location_id, is_active)
-           VALUES (?,?,?,?,?,?,?)""",
-        (username, hash_password(data.password), data.name, data.role, data.zone_id, data.location_id, data.is_active),
+        """INSERT INTO users (username, password_hash, name, role, zone_id, is_active)
+           VALUES (?,?,?,?,?,?)""",
+        (username, hash_password(data.password), data.name, data.role, data.zone_id, data.is_active),
     )
     db.commit()
     log_audit(db, user["id"], "USER_CREATE", "user", cur.lastrowid, username, user["username"])
@@ -135,14 +137,11 @@ def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(
             raise HTTPException(400, "Password cannot be empty")
         fields.append("password_hash = ?")
         values.append(hash_password(data.password))
-    # Explicit null is meaningful here: moving a user to another role has to be
-    # able to clear the zone or location that the old role no longer needs.
+    # Explicit null is meaningful here: demoting someone to super admin has to
+    # clear the zone that role no longer needs.
     if "zone_id" in provided:
         fields.append("zone_id = ?")
         values.append(data.zone_id)
-    if "location_id" in provided:
-        fields.append("location_id = ?")
-        values.append(data.location_id)
     if data.is_active is not None:
         if row["role"] == "super_admin" and not data.is_active and row["is_active"]:
             others = db.execute(
@@ -156,11 +155,10 @@ def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(
 
     final_role = data.role if data.role is not None else row["role"]
     final_zone = data.zone_id if "zone_id" in provided else row["zone_id"]
-    final_location = data.location_id if "location_id" in provided else row["location_id"]
-    if final_role in ("zone_admin", "distributor") and not final_zone:
-        raise HTTPException(400, "A zone is required for zone admin and distributor users")
-    if final_role == "temple" and not final_location:
-        raise HTTPException(400, "A location is required for temple users")
+    if final_role != "super_admin" and not final_zone:
+        raise HTTPException(400, "A zone is required for every role except super admin")
+    if final_role != "super_admin":
+        validate_zone(db, final_zone)
 
     if fields:
         values.append(user_id)

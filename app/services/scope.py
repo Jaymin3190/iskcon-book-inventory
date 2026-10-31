@@ -1,21 +1,19 @@
 def location_ids(db, user) -> set:
-    role = user["role"]
-    if role == "super_admin":
+    if user["role"] == "super_admin":
         rows = db.execute("SELECT id FROM locations").fetchall()
         return {r["id"] for r in rows}
-    if role in ("zone_admin", "distributor"):
-        ids = {user["zone_id"]}
-        rows = db.execute("SELECT id FROM locations WHERE parent_id = ?", (user["zone_id"],)).fetchall()
-        ids.update(r["id"] for r in rows)
-        row = db.execute("SELECT parent_id FROM locations WHERE id = ?", (user["zone_id"],)).fetchone()
-        if row and row["parent_id"]:
-            ids.add(row["parent_id"])
-        return ids
-    ids = {user["location_id"]}
-    if user["location_id"]:
-        row = db.execute("SELECT parent_id FROM locations WHERE id = ?", (user["location_id"],)).fetchone()
-        if row and row["parent_id"]:
-            ids.add(row["parent_id"])
+    zone_id = user["zone_id"]
+    if not zone_id:
+        # Unassigned non-super users must see nothing, never everything.
+        return {None}
+    if user["role"] == "distributor":
+        return {zone_id}
+    ids = {zone_id}
+    rows = db.execute("SELECT id FROM locations WHERE parent_id = ?", (zone_id,)).fetchall()
+    ids.update(r["id"] for r in rows)
+    row = db.execute("SELECT parent_id FROM locations WHERE id = ?", (zone_id,)).fetchone()
+    if row and row["parent_id"]:
+        ids.add(row["parent_id"])
     return ids
 
 

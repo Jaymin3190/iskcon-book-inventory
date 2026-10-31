@@ -2,6 +2,13 @@ const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+function hasRole(role) {
+  const user = state.user;
+  return Boolean(user && user.role === role);
+}
+
+function hasAnyRole(...roles) { return roles.some(hasRole); }
+
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
@@ -20,7 +27,7 @@ async function api(path, opts = {}) {
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'books', label: 'Books', roles: ['super_admin', 'zone_admin', 'temple'] },
-  { id: 'stock', label: 'Stock', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'stock', label: 'Stock', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
   { id: 'transfers', label: 'Transfers', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'returns', label: 'Returns', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'pos', label: 'POS Billing', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
@@ -112,7 +119,7 @@ function showApp() {
   document.getElementById('loginView').hidden = true;
   document.getElementById('appView').hidden = false;
   const u = state.user;
-  const loc = u.location_name || u.zone_name || 'Global';
+  const loc = u.zone_name || 'Global';
   const fullInfo = `${u.name} (${u.role}) — ${loc}`;
   const av = initials(u.name);
   document.getElementById('userInfo').textContent = `${u.name} · ${loc}`;
@@ -124,7 +131,7 @@ function showApp() {
   document.getElementById('sidebarAvatar').textContent = av;
   const nav = document.getElementById('tabs');
   setSidebarOpen(false);
-  const allowedTabs = TABS.filter(t => t.roles.includes(u.role));
+  const allowedTabs = TABS.filter(t => hasAnyRole(...t.roles));
   nav.innerHTML = TAB_GROUPS.map(group => {
     const items = group.tabs.map(id => allowedTabs.find(t => t.id === id)).filter(Boolean);
     if (!items.length) return '';
@@ -269,7 +276,7 @@ async function dashboard() {
 let bookQuery = '';
 let bookSearchTimer = null;
 
-function canManageBooks() { return ['super_admin', 'zone_admin'].includes(state.user.role); }
+function canManageBooks() { return hasAnyRole('super_admin', 'zone_admin'); }
 
 async function books() {
   const canEdit = canManageBooks();
@@ -357,8 +364,12 @@ async function stock() {
   const locs = await api('/api/locations');
   const rows = await api('/api/stock' + (stockLocFilter ? '?location_id=' + stockLocFilter : ''));
   const role = state.user.role;
-  const adjustmentWarehouse = locs.find(l => l.type === 'warehouse' &&
-    (role === 'super_admin' || (role === 'temple' && l.id === state.user.location_id)));
+  const adjustmentWarehouse = ['super_admin', 'temple'].includes(role)
+    ? locs.find(l => l.type === 'warehouse' && l.parent_id == null)
+    : null;
+  const canCount = hasAnyRole('super_admin', 'zone_admin', 'temple');
+  const canViewLedger = canCount;
+  const hasActions = Boolean(adjustmentWarehouse || canViewLedger);
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar">
@@ -367,12 +378,12 @@ async function stock() {
           ${locs.map(l => `<option value="${l.id}" ${String(l.id) === stockLocFilter ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
         </select>
         ${adjustmentWarehouse ? '<button class="primary" onclick="stockAdjustModal()">+ Receive stock at warehouse</button>' : ''}
-        <button class="action" onclick="stockCountModal()">Start stock count</button>
-        <button class="action" onclick="showLedger()">Stock ledger</button>
+        ${canCount ? '<button class="action" onclick="stockCountModal()">Start stock count</button>' : ''}
+        ${canViewLedger ? '<button class="action" onclick="showLedger()">Stock ledger</button>' : ''}
       </div>
       <table class="stock-inventory-table">
-        <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th><th>Actions</th></tr>
-        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td><td>${adjustmentWarehouse && r.location_id === adjustmentWarehouse.id ? `<button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button>` : ''}<button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button></td></tr>`).join('') || '<tr><td colspan="8" class="hint">No stock rows found.</td></tr>'}
+        <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th>${hasActions ? '<th>Actions</th>' : ''}</tr>
+        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td>${hasActions ? `<td>${adjustmentWarehouse && r.location_id === adjustmentWarehouse.id ? `<button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button>` : ''}${canViewLedger ? `<button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button>` : ''}</td>` : ''}</tr>`).join('') || `<tr><td colspan="${hasActions ? 8 : 7}" class="hint">No stock rows found.</td></tr>`}
       </table>
     </div>`;
   pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row', true);
@@ -382,8 +393,7 @@ async function stockAdjustModal(bookId = null, locationId = null) {
   const canAdjust = ['super_admin', 'temple'].includes(state.user.role);
   if (!canAdjust) { toast('Only warehouse staff can adjust stock', 'error'); return; }
   const [locs, books] = await Promise.all([api('/api/locations?type=warehouse'), api('/api/books')]);
-  const allowedLocations = locs.filter(l => l.type === 'warehouse' && l.parent_id == null &&
-    (state.user.role === 'super_admin' || l.id === state.user.location_id));
+  const allowedLocations = locs.filter(l => l.type === 'warehouse' && l.parent_id == null);
   if (!allowedLocations.length) { toast('No assigned warehouse is available for stock entry', 'error'); return; }
   state.books = books;
   openModal(`<h3>Receive / adjust warehouse stock</h3>
@@ -466,7 +476,6 @@ async function scComplete() {
 
 async function renderTransfers() {
   const rows = await api('/api/stock/transfers');
-  const role = state.user.role;
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar"><button class="primary" onclick="transferForm()">+ Request transfer</button></div>
@@ -477,21 +486,21 @@ async function renderTransfers() {
           <td><button class="action" onclick="transferDetail(${t.id})">view</button></td>
           <td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td>
           <td>${esc(t.requested_by_name || '')}</td>
-          <td>${transferActions(t, role)}</td>
+          <td>${transferActions(t)}</td>
         </tr>`).join('')}
       </table>
     </div>`;
 }
 
-function transferActions(t, role) {
+function transferActions(t) {
   let h = '';
-  if (t.status === 'requested' && (role === 'super_admin' || role === 'zone_admin'))
+  if (t.status === 'requested' && hasAnyRole('super_admin', 'zone_admin'))
     h += `<button class="action" onclick="tAction(${t.id},'approve')">Approve</button><button class="danger" onclick="tAction(${t.id},'reject')">Reject</button>`;
-  if (t.status === 'approved' && (role === 'super_admin' || role === 'zone_admin' || role === 'distributor'))
+  if (t.status === 'approved' && hasAnyRole('super_admin', 'zone_admin'))
     h += `<button class="action" onclick="tAction(${t.id},'dispatch')">Dispatch</button>`;
-  if (t.status === 'dispatched' && (role === 'super_admin' || role === 'temple' || role === 'zone_admin' || role === 'distributor'))
+  if (t.status === 'dispatched' && hasAnyRole('super_admin', 'zone_admin'))
     h += `<button class="action" onclick="tAction(${t.id},'receive')">Receive</button>`;
-  if ((t.status === 'requested' || t.status === 'rejected') && (role === 'super_admin' || role === 'zone_admin'))
+  if ((t.status === 'requested' || t.status === 'rejected') && hasAnyRole('super_admin', 'zone_admin'))
     h += `<button class="danger" onclick="tDelete(${t.id})">Delete</button>`;
   return h || '&mdash;';
 }
@@ -580,7 +589,7 @@ async function trSubmit() {
 
 async function renderReturns() {
   const [rows, damaged] = await Promise.all([api('/api/stock/returns'), api('/api/stock/damaged')]);
-  const canProc = ['super_admin', 'zone_admin'].includes(state.user.role);
+  const canProc = hasAnyRole('super_admin', 'zone_admin');
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar">
@@ -731,13 +740,13 @@ async function pos() {
   const [books, locs] = await Promise.all([api('/api/books'), api('/api/locations')]);
   state.books = books;
   state.cart = [];
-  const isDistributor = state.user.role === 'distributor';
+  const isZoneMapped = state.user.role !== 'super_admin' && state.user.zone_id != null;
   const defaultWarehouse = locs.find(l => l.type === 'warehouse' && l.parent_id == null);
-  const defLoc = isDistributor
+  const defLoc = isZoneMapped
     ? state.user.zone_id
-    : state.user.location_id || state.user.zone_id ||
+    : state.user.zone_id ||
       (state.user.role === 'super_admin' ? defaultWarehouse?.id || locs[0]?.id : null);
-  const billingLocation = locs.find(l => l.id === (isDistributor ? state.user.zone_id : defLoc));
+  const billingLocation = locs.find(l => l.id === (isZoneMapped ? state.user.zone_id : defLoc));
   if (!billingLocation && state.user.role !== 'super_admin') {
     toast('No assigned billing location is available', 'error'); return;
   }
@@ -745,7 +754,7 @@ async function pos() {
     <div class="card">
       <h2>Quick-scan billing</h2>
       <div class="toolbar pos-scan-toolbar" id="scanBox">
-        ${isDistributor ? `<span class="billing-location">Billing zone: <strong>${esc(billingLocation.name)}</strong></span>` : `<select id="billLoc" style="max-width:220px">${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`}
+        ${isZoneMapped ? `<span class="billing-location">Billing zone: <strong>${esc(billingLocation.name)}</strong></span>` : `<select id="billLoc" style="max-width:220px">${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`}
         <input id="scanInput" placeholder="Scan / type barcode or ISBN, press Enter" style="flex:1" onkeydown="if(event.key==='Enter')doScan(this.value)">
         <button id="cameraToggle" class="primary" onclick="openScannerPOS()">Scan with camera</button>
         <button class="action" onclick="invoiceList()">Invoice history</button>
@@ -1228,7 +1237,7 @@ async function checkout() {
   if (payMode === 'ledger' && !custName) return toast('Customer name required for ledger (credit) billing', 'error');
   try {
     const res = await api('/api/pos/invoices', { method: 'POST', body: {
-      location_id: state.user.role === 'distributor' ? state.user.zone_id : Number(document.getElementById('billLoc').value),
+      location_id: state.user.role !== 'super_admin' ? state.user.zone_id : Number(document.getElementById('billLoc').value),
       customer_name: custName, customer_phone: document.getElementById('custPhone').value,
       customer_email: document.getElementById('custEmail').value,
       payment_mode: payMode, payment_ref: payRef,
@@ -1262,14 +1271,14 @@ async function printInvoice(invoiceId) {
 
 async function invoiceList() {
   const rows = await api('/api/pos/invoices');
-  const canDeleteAny = ['super_admin', 'zone_admin'].includes(state.user.role);
+  const canDeleteAny = hasAnyRole('super_admin', 'zone_admin');
   openModal(`<h3>Invoice history</h3>
     <table>
       <tr><th>Invoice</th><th>Date</th><th>Location</th><th>Customer</th><th>Payment</th><th>Total</th><th>Actions</th></tr>
       ${rows.map(i => `<tr>
         <td>${esc(i.invoice_number)}</td><td>${esc(i.created_at)}</td><td>${esc(i.location_name)}</td>
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td>&#8377;${Number(i.total).toFixed(2)}</td>
-        <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${canDeleteAny || i.cashier_id === state.user.id ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
+        <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>'}
     </table>`);
 }
@@ -1284,7 +1293,7 @@ async function invoiceDelete(invoiceId) {
 }
 
 async function reports() {
-  const canViewDistributorSales = ['super_admin', 'zone_admin'].includes(state.user.role);
+  const canViewDistributorSales = hasAnyRole('super_admin', 'zone_admin');
   const [sales, byBook, stockSum, tf, distributorSales] = await Promise.all([
     api('/api/reports/sales'), api('/api/reports/sales-by-book'), api('/api/reports/stock-summary'), api('/api/reports/transfers'),
     canViewDistributorSales ? api('/api/reports/distributor-sales') : Promise.resolve([]),
@@ -1383,16 +1392,16 @@ async function users() {
     <div class="card">
       <div class="toolbar">${canEdit ? '<button class="primary" onclick="userForm()">+ New user</button>' : ''}</div>
       <table>
-        <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Location</th><th>Active</th>${canEdit ? '<th>Actions</th>' : ''}</tr>
+        <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Active</th>${canEdit ? '<th>Actions</th>' : ''}</tr>
         ${rows.map(u => `<tr>
           <td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
-          <td>${esc(u.zone_name || '')}</td><td>${esc(u.location_name || '')}</td><td>${u.is_active ? 'Yes' : 'No'}</td>
+          <td>${esc(u.zone_name || '')}</td><td>${u.is_active ? 'Yes' : 'No'}</td>
           ${canEdit ? `<td>
             <button class="action" onclick="userForm(${u.id})">Edit</button>
             <button class="action" onclick="userToggle(${u.id})">${u.is_active ? 'Disable' : 'Enable'}</button>
             <button class="danger" onclick="userDelete(${u.id})">Delete</button>
           </td>` : ''}
-        </tr>`).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" class="hint">No users found.</td></tr>`}
+        </tr>`).join('') || `<tr><td colspan="${canEdit ? 6 : 5}" class="hint">No users found.</td></tr>`}
       </table>
     </div>`;
 }
@@ -1401,7 +1410,6 @@ async function userForm(userId = null) {
   const u = userId ? (state.users || []).find(x => x.id === userId) : null;
   const locs = await api('/api/locations');
   const zones = locs.filter(l => l.type === 'zone');
-  const stores = locs.filter(l => ['store', 'warehouse'].includes(l.type));
   const r = u?.role || 'temple';
   openModal(`<h3>${u ? 'Edit user — ' + esc(u.username) : 'New user'}</h3>
     <div class="form-grid">
@@ -1416,11 +1424,8 @@ async function userForm(userId = null) {
           <option value="temple" ${r === 'temple' ? 'selected' : ''}>Temple / Store</option>
         </select>
       </div>
-      <div class="form-row"><label>Zone (for Zone Admin / Distributor)</label>
+      <div class="form-row"><label>Zone *</label>
         <select id="uZone"><option value="">— none —</option>${zones.map(z => `<option value="${z.id}" ${String(u?.zone_id) === String(z.id) ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}</select>
-      </div>
-      <div class="form-row"><label>Location (for Temple)</label>
-        <select id="uStore"><option value="">— none —</option>${stores.map(s => `<option value="${s.id}" ${String(u?.location_id) === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       </div>
       <div class="form-row"><label>Active</label>
         <select id="uActive"><option value="1" ${u?.is_active !== 0 ? 'selected' : ''}>Yes</option><option value="0" ${u?.is_active === 0 ? 'selected' : ''}>No</option></select>
@@ -1440,7 +1445,6 @@ async function userSave(userId) {
     name: document.getElementById('uName').value.trim(),
     role,
     zone_id: role === 'super_admin' ? null : (Number(document.getElementById('uZone').value) || null),
-    location_id: role === 'temple' ? (Number(document.getElementById('uStore').value) || null) : null,
     is_active: Number(document.getElementById('uActive').value),
   };
   if (password) body.password = password;

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from ..auth import require_roles
+from ..auth import has_role, require_roles
 from ..database import get_db
 from ..services.scope import location_ids
 
@@ -67,7 +67,7 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
              JOIN books b ON b.id = ii.book_id
              WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
     params = list(ids)
-    if user["role"] == "zone_admin":
+    if has_role(user, "zone_admin"):
         sql += " AND u.zone_id = ?"
         params.append(user["zone_id"])
     if frm:
@@ -122,7 +122,7 @@ class AuditFilter(BaseModel):
 
 @router.get("/api/audit")
 def audit_trail(limit: int = 100, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
-    if user["role"] == "zone_admin":
+    if has_role(user, "zone_admin"):
         zone_ids = location_ids(db, user)
         return [dict(r) for r in db.execute(
             """SELECT a.* FROM audit_logs a
