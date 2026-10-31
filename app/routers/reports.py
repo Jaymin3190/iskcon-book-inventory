@@ -9,7 +9,7 @@ router = APIRouter(tags=["reports"])
 
 
 @router.get("/api/reports/sales")
-def sales_report(frm: str = None, to: str = None, location_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def sales_report(frm: str = None, to: str = None, location_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT i.location_id, l.code AS location_code, l.name AS location_name,
                     COUNT(*) AS invoice_count, COALESCE(SUM(i.total),0) AS revenue,
@@ -34,7 +34,7 @@ def sales_report(frm: str = None, to: str = None, location_id: int = None, db=De
 
 
 @router.get("/api/reports/sales-by-book")
-def sales_by_book(frm: str = None, to: str = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def sales_by_book(frm: str = None, to: str = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT b.id AS book_id, b.title, b.barcode,
                     COALESCE(SUM(ii.qty),0) AS qty_sold, COALESCE(SUM(ii.line_total),0) AS revenue
@@ -81,7 +81,7 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
 
 
 @router.get("/api/reports/stock-summary")
-def stock_summary(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def stock_summary(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT l.id AS location_id, l.code, l.name, l.type, l.parent_id,
                     COUNT(s.book_id) AS skus, COALESCE(SUM(s.qty),0) AS total_units,
@@ -95,7 +95,7 @@ def stock_summary(db=Depends(get_db), user=Depends(require_roles("super_admin", 
 
 
 @router.get("/api/reports/transfers")
-def transfers_report(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def transfers_report(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT status, COUNT(*) AS n
              FROM transfers
@@ -106,7 +106,7 @@ def transfers_report(db=Depends(get_db), user=Depends(require_roles("super_admin
 
 
 @router.get("/api/reports/returns")
-def returns_report(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def returns_report(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT r.status, COUNT(*) AS n, COALESCE(SUM(ri.qty),0) AS units
              FROM returns r

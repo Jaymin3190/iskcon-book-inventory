@@ -1262,13 +1262,14 @@ async function printInvoice(invoiceId) {
 
 async function invoiceList() {
   const rows = await api('/api/pos/invoices');
+  const canDeleteAny = ['super_admin', 'zone_admin'].includes(state.user.role);
   openModal(`<h3>Invoice history</h3>
     <table>
       <tr><th>Invoice</th><th>Date</th><th>Location</th><th>Customer</th><th>Payment</th><th>Total</th><th>Actions</th></tr>
       ${rows.map(i => `<tr>
         <td>${esc(i.invoice_number)}</td><td>${esc(i.created_at)}</td><td>${esc(i.location_name)}</td>
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td>&#8377;${Number(i.total).toFixed(2)}</td>
-        <td><button class="action" onclick="printInvoice(${i.id})">Print</button><button class="danger" onclick="invoiceDelete(${i.id})">Delete</button></td>
+        <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${canDeleteAny || i.cashier_id === state.user.id ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>'}
     </table>`);
 }

@@ -17,7 +17,7 @@ DAMAGED_REASON_CODES = ("DAMAGED", "STAINED", "MISSING_PAGES", "PRINT_ERROR", "O
 
 
 @router.get("")
-def current_stock(location_id: int = None, book_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def current_stock(location_id: int = None, book_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT s.book_id, s.location_id, s.qty, s.updated_at,
                     b.title, b.barcode, b.isbn, b.price, b.publication,
@@ -38,7 +38,7 @@ def current_stock(location_id: int = None, book_id: int = None, db=Depends(get_d
 
 
 @router.get("/ledger")
-def stock_ledger(location_id: int = None, book_id: int = None, limit: int = 200, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def stock_ledger(location_id: int = None, book_id: int = None, limit: int = 200, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT m.*, b.title, l.code AS location_code, u.username AS user_name
              FROM stock_movements m
@@ -196,7 +196,7 @@ class TransferIn(BaseModel):
 
 
 @router.get("/transfers")
-def list_transfers(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def list_transfers(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT t.*,
                     f.code AS from_code, f.name AS from_name,
@@ -213,7 +213,7 @@ def list_transfers(db=Depends(get_db), user=Depends(require_roles("super_admin",
 
 
 @router.get("/transfers/{transfer_id}")
-def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
@@ -247,7 +247,7 @@ def delete_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_r
 
 
 @router.post("/transfers")
-def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     if not data.items:
         raise HTTPException(400, "At least one item is required")
     if not can_view(db, user, data.from_location_id) or not can_view(db, user, data.to_location_id):
@@ -332,7 +332,7 @@ def reject_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_r
 
 
 @router.post("/transfers/{transfer_id}/dispatch")
-def dispatch_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor"))):
+def dispatch_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
@@ -369,7 +369,7 @@ def dispatch_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require
 
 
 @router.post("/transfers/{transfer_id}/receive")
-def receive_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def receive_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
@@ -377,7 +377,7 @@ def receive_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_
         raise HTTPException(400, f"Cannot receive transfer in status '{t['status']}'")
     if user["role"] not in ("super_admin",) and not (
         (user["role"] == "temple" and user["location_id"] == t["to_location_id"])
-        or (user["role"] in ("zone_admin", "distributor") and can_view(db, user, t["to_location_id"]))
+        or (user["role"] == "zone_admin" and can_view(db, user, t["to_location_id"]))
     ):
         raise HTTPException(403, "Forbidden")
     items = db.execute("SELECT * FROM transfer_items WHERE transfer_id = ?", (transfer_id,)).fetchall()
@@ -404,7 +404,7 @@ class ReturnIn(BaseModel):
 
 
 @router.get("/returns")
-def list_returns(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def list_returns(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT r.*, l.code AS location_code, l.name AS location_name,
                     (SELECT COUNT(*) FROM return_items WHERE return_id = r.id) AS item_count,
@@ -417,7 +417,7 @@ def list_returns(db=Depends(get_db), user=Depends(require_roles("super_admin", "
 
 
 @router.post("/returns")
-def create_return(data: ReturnIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def create_return(data: ReturnIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     if not data.items:
         raise HTTPException(400, "At least one item is required")
     if data.location_id not in location_ids(db, user):
@@ -505,7 +505,7 @@ class DamagedIn(BaseModel):
 
 
 @router.get("/damaged")
-def list_damaged(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+def list_damaged(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = location_ids(db, user)
     sql = """SELECT d.*, l.code AS location_code, b.title
              FROM damaged d
