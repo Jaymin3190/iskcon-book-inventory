@@ -196,12 +196,12 @@ def delete_user(user_id: int, db=Depends(get_db), user=Depends(require_roles("su
         ("returns", "processed_by"),
         ("damaged", "created_by"),
         ("stock_counts", "counted_by"),
-        ("audit_logs", "user_id"),
     ]
     for table, col in refs:
         r = db.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE {col} = ?", (user_id,)).fetchone()
         if r["n"]:
             raise HTTPException(409, f"Cannot delete: user has activity in {table.replace('_', ' ')}")
+    db.execute("DELETE FROM audit_logs WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     db.commit()
     log_audit(db, user["id"], "USER_DELETE", "user", user_id, target["username"], user["username"])

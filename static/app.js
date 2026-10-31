@@ -1471,7 +1471,7 @@ async function userToggle(userId) {
 
 async function userDelete(userId) {
   const u = (state.users || []).find(x => x.id === userId);
-  if (!confirm(`Delete user "${u ? u.username : userId}"?`)) return;
+  if (!confirm(`Permanently delete user "${u ? u.username : userId}" and their audit history? Other activity such as bills, transfers, or stock movements will still prevent deletion.`)) return;
   try {
     await api('/api/users/' + userId, { method: 'DELETE' });
     toast('User deleted', 'success'); refreshCurrent();

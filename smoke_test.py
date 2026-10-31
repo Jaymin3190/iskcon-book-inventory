@@ -449,7 +449,10 @@ check("user can be disabled", code == 200 and login("smoke-user", "updated-smoke
 code, _ = call("PATCH", f"/api/users/{test_user_id}", token=super_t, body={"is_active": 1})
 check("user can be re-enabled", code == 200 and bool(login("smoke-user", "updated-smoke-password")))
 code, _ = call("DELETE", f"/api/users/{test_user_id}", token=super_t)
-check("user with audit history cannot be deleted", code == 409)
+check("user with audit history can be deleted", code == 200)
+_, audit_after_user_delete = call("GET", "/api/audit?limit=500", token=super_t)
+check("deleting user removes their audit history",
+      all(row["user_id"] != test_user_id for row in audit_after_user_delete))
 code, disposable_user = call("POST", "/api/users", token=super_t, body={
     "username": "smoke-delete-user", "password": "delete-smoke-password", "name": "Disposable Smoke User",
     "role": "distributor", "zone_id": 2,
