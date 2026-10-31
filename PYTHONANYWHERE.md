@@ -100,6 +100,29 @@ scheduled tasks are available on your plan. Periodically download a backup to
 another location and verify that it can be restored; backups on the same
 account do not protect against loss of account access.
 
+## Clearing inventory data while keeping users and locations
+
+`reset_data.py` deletes every application table's records except `users` and
+`locations`. It creates and verifies a timestamped backup before deletion and
+requires the explicit `--confirm` flag. The database schema remains in place.
+
+For the deployed database, first update the checkout and temporarily prevent
+staff from using the app while the reset runs. In a PythonAnywhere Bash
+console, run:
+
+```bash
+cd ~/iskcon-book-inventory
+git pull
+~/.virtualenvs/iskcon-book-inventory/bin/python reset_data.py \
+  --database ~/iskcon-book-inventory-data/inventory.db \
+  --backup-dir ~/inventory-backups \
+  --confirm
+```
+
+Verify the backup path and preserved user/location counts in the output, then
+reload the web app. The command uses the explicit deployed database path so it
+does not accidentally clear a checkout-local database.
+
 ## Notes
 
 - The free tier is intended for small projects and has storage, CPU, outbound
