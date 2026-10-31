@@ -1405,8 +1405,8 @@ async function userForm(userId = null) {
   const r = u?.role || 'temple';
   openModal(`<h3>${u ? 'Edit user — ' + esc(u.username) : 'New user'}</h3>
     <div class="form-grid">
-      <div class="form-row"><label>Username ${u ? '' : '*'}</label><input id="uUser" value="${esc(u?.username || '')}" ${u ? 'disabled' : ''}></div>
-      <div class="form-row"><label>Password ${u ? '(leave blank to keep)' : '*'}</label><input id="uPass" type="password"></div>
+      <div class="form-row"><label>Username ${u ? '' : '*'}</label><input id="uUser" value="${esc(u?.username || '')}" autocomplete="off" ${u ? 'disabled' : ''}></div>
+      <div class="form-row"><label>Password ${u ? '(leave blank to keep)' : '*'}</label><input id="uPass" type="password" autocomplete="new-password" placeholder="${u ? 'Set a new password' : ''}"></div>
       <div class="form-row"><label>Name *</label><input id="uName" value="${esc(u?.name || '')}"></div>
       <div class="form-row"><label>Role</label>
         <select id="uRole">

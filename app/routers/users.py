@@ -63,6 +63,10 @@ def list_users(db=Depends(get_db), user=Depends(require_roles("super_admin", "zo
 def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
     if data.role not in VALID_ROLES:
         raise HTTPException(400, "Invalid role")
+    if not data.password:
+        raise HTTPException(400, "Password is required")
+    if not data.name.strip():
+        raise HTTPException(400, "Name is required")
     if data.role == "temple" and not data.location_id:
         raise HTTPException(400, "location_id is required for temple users")
     if data.role in ("zone_admin", "distributor") and not data.zone_id:
@@ -85,33 +89,64 @@ def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(
     row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if not row:
         raise HTTPException(404, "User not found")
+    provided = data.model_fields_set
     fields = []
     values = []
     if data.name is not None:
+        if not data.name.strip():
+            raise HTTPException(400, "Name cannot be empty")
         fields.append("name = ?")
-        values.append(data.name)
+        values.append(data.name.strip())
     if data.role is not None:
         if data.role not in VALID_ROLES:
             raise HTTPException(400, "Invalid role")
+        if row["role"] == "super_admin" and data.role != "super_admin" and row["is_active"]:
+            others = db.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE role = 'super_admin' AND is_active = 1 AND id != ?",
+                (user_id,),
+            ).fetchone()["n"]
+            if others == 0:
+                raise HTTPException(400, "Cannot change the role of the last active super admin")
         fields.append("role = ?")
         values.append(data.role)
     if data.password is not None:
+        if not data.password:
+            raise HTTPException(400, "Password cannot be empty")
         fields.append("password_hash = ?")
         values.append(hash_password(data.password))
-    if data.zone_id is not None:
+    # Explicit null is meaningful here: moving a user to another role has to be
+    # able to clear the zone or location that the old role no longer needs.
+    if "zone_id" in provided:
         fields.append("zone_id = ?")
         values.append(data.zone_id)
-    if data.location_id is not None:
+    if "location_id" in provided:
         fields.append("location_id = ?")
         values.append(data.location_id)
     if data.is_active is not None:
+        if row["role"] == "super_admin" and not data.is_active and row["is_active"]:
+            others = db.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE role = 'super_admin' AND is_active = 1 AND id != ?",
+                (user_id,),
+            ).fetchone()["n"]
+            if others == 0:
+                raise HTTPException(400, "Cannot disable the last active super admin")
         fields.append("is_active = ?")
         values.append(data.is_active)
+
+    final_role = data.role if data.role is not None else row["role"]
+    final_zone = data.zone_id if "zone_id" in provided else row["zone_id"]
+    final_location = data.location_id if "location_id" in provided else row["location_id"]
+    if final_role in ("zone_admin", "distributor") and not final_zone:
+        raise HTTPException(400, "A zone is required for zone admin and distributor users")
+    if final_role == "temple" and not final_location:
+        raise HTTPException(400, "A location is required for temple users")
+
     if fields:
         values.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
         db.commit()
-    log_audit(db, user["id"], "USER_UPDATE", "user", user_id, row["username"], user["username"])
+    log_audit(db, user["id"], "USER_UPDATE", "user", user_id,
+              row["username"] + (" (password reset)" if data.password else ""), user["username"])
     return {"ok": True}
 
 
