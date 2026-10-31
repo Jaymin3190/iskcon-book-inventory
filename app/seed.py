@@ -28,7 +28,7 @@ LOCATIONS = [
 
 USERS = [
     ("superadmin", "admin123", "Global Super Admin", "super_admin", None, None),
-    ("temple-admin", "temple123", "Temple Admin", "temple", None, 1),
+    ("templeAdmin", "temple123", "Temple Admin", "temple", None, 1),
     ("leader-temple-zone", "zone123", "Zone Leader - Temple Zone", "zone_admin", 2, None),
     ("leader-niradhar-ashram", "zone123", "Zone Leader - Niradhar Ashram", "zone_admin", 3, None),
     ("leader-gokul-nagar", "zone123", "Zone Leader - Gokul Nagar", "zone_admin", 4, None),

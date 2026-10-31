@@ -45,7 +45,7 @@ def qty(stock_rows, book_id, loc_id):
 
 
 super_t = login("superadmin", "admin123")
-temple_t = login("temple-admin", "temple123")
+temple_t = login("templeAdmin", "temple123")
 zone_t = login("leader-temple-zone", "zone123")
 dist_t = login("distributor", "dist123")
 
@@ -54,7 +54,7 @@ check("login temple admin", bool(temple_t))
 check("login zone leader", bool(zone_t))
 check("login distributor", bool(dist_t))
 check("old users removed", login("store-mumbai", "store123") is None and login("zoneadmin-west", "zone123") is None)
-check("bad creds rejected", login("temple-admin", "wrong") is None)
+check("bad creds rejected", login("templeAdmin", "wrong") is None)
 
 _, me = call("GET", "/api/auth/me", token=super_t)
 check("me returns role", me["user"]["role"] == "super_admin")

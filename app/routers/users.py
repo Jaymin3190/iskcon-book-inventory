@@ -23,6 +23,7 @@ class UserIn(BaseModel):
 
 
 class UserPatch(BaseModel):
+    username: Optional[str] = None
     name: Optional[str] = None
     password: Optional[str] = None
     role: Optional[str] = None
@@ -59,6 +60,15 @@ def list_users(db=Depends(get_db), user=Depends(require_roles("super_admin", "zo
     return [sanitize(r) for r in rows]
 
 
+def clean_username(value: str) -> str:
+    username = value.strip()
+    if not username:
+        raise HTTPException(400, "Username cannot be empty")
+    if any(ch.isspace() for ch in username):
+        raise HTTPException(400, "Username cannot contain spaces")
+    return username
+
+
 @router.post("")
 def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
     if data.role not in VALID_ROLES:
@@ -67,21 +77,22 @@ def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("su
         raise HTTPException(400, "Password is required")
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
+    username = clean_username(data.username)
     if data.role == "temple" and not data.location_id:
         raise HTTPException(400, "location_id is required for temple users")
     if data.role in ("zone_admin", "distributor") and not data.zone_id:
         raise HTTPException(400, "zone_id is required for zone_admin/distributor users")
-    existing = db.execute("SELECT id FROM users WHERE username = ?", (data.username,)).fetchone()
+    existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
     if existing:
         raise HTTPException(409, "Username already exists")
     cur = db.execute(
         """INSERT INTO users (username, password_hash, name, role, zone_id, location_id, is_active)
            VALUES (?,?,?,?,?,?,?)""",
-        (data.username, hash_password(data.password), data.name, data.role, data.zone_id, data.location_id, data.is_active),
+        (username, hash_password(data.password), data.name, data.role, data.zone_id, data.location_id, data.is_active),
     )
     db.commit()
-    log_audit(db, user["id"], "USER_CREATE", "user", cur.lastrowid, data.username, user["username"])
-    return {"id": cur.lastrowid, "username": data.username}
+    log_audit(db, user["id"], "USER_CREATE", "user", cur.lastrowid, username, user["username"])
+    return {"id": cur.lastrowid, "username": username}
 
 
 @router.patch("/{user_id}")
@@ -92,6 +103,16 @@ def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(
     provided = data.model_fields_set
     fields = []
     values = []
+    if data.username is not None:
+        new_username = clean_username(data.username)
+        if new_username != row["username"]:
+            duplicate = db.execute(
+                "SELECT id FROM users WHERE username = ? AND id != ?", (new_username, user_id)
+            ).fetchone()
+            if duplicate:
+                raise HTTPException(409, "Username already exists")
+        fields.append("username = ?")
+        values.append(new_username)
     if data.name is not None:
         if not data.name.strip():
             raise HTTPException(400, "Name cannot be empty")
@@ -145,8 +166,11 @@ def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(
         values.append(user_id)
         db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
         db.commit()
-    log_audit(db, user["id"], "USER_UPDATE", "user", user_id,
-              row["username"] + (" (password reset)" if data.password else ""), user["username"])
+    renamed = data.username is not None and data.username.strip() != row["username"]
+    details = row["username"] + (f" -> {data.username.strip()}" if renamed else "")
+    if data.password:
+        details += " (password reset)"
+    log_audit(db, user["id"], "USER_UPDATE", "user", user_id, details, user["username"])
     return {"ok": True}
 
 

@@ -1405,7 +1405,7 @@ async function userForm(userId = null) {
   const r = u?.role || 'temple';
   openModal(`<h3>${u ? 'Edit user — ' + esc(u.username) : 'New user'}</h3>
     <div class="form-grid">
-      <div class="form-row"><label>Username ${u ? '' : '*'}</label><input id="uUser" value="${esc(u?.username || '')}" autocomplete="off" ${u ? 'disabled' : ''}></div>
+      <div class="form-row"><label>Username *</label><input id="uUser" value="${esc(u?.username || '')}" autocomplete="off"></div>
       <div class="form-row"><label>Password ${u ? '(leave blank to keep)' : '*'}</label><input id="uPass" type="password" autocomplete="new-password" placeholder="${u ? 'Set a new password' : ''}"></div>
       <div class="form-row"><label>Name *</label><input id="uName" value="${esc(u?.name || '')}"></div>
       <div class="form-row"><label>Role</label>
@@ -1432,7 +1432,11 @@ async function userForm(userId = null) {
 async function userSave(userId) {
   const role = document.getElementById('uRole').value;
   const password = document.getElementById('uPass').value;
+  const username = document.getElementById('uUser').value.trim();
+  if (!username) { toast('Username is required', 'error'); return; }
+  if (/\s/.test(username)) { toast('Username cannot contain spaces', 'error'); return; }
   const body = {
+    username,
     name: document.getElementById('uName').value.trim(),
     role,
     zone_id: role === 'super_admin' ? null : (Number(document.getElementById('uZone').value) || null),
@@ -1445,9 +1449,8 @@ async function userSave(userId) {
     if (userId) {
       await api('/api/users/' + userId, { method: 'PATCH', body });
     } else {
-      const username = document.getElementById('uUser').value.trim();
-      if (!username || !password) { toast('Username and password are required', 'error'); return; }
-      await api('/api/users', { method: 'POST', body: { ...body, username, password } });
+      if (!password) { toast('Password is required', 'error'); return; }
+      await api('/api/users', { method: 'POST', body: { ...body, password } });
     }
     closeModal(); toast(userId ? 'User updated' : 'User created', 'success'); refreshCurrent();
   } catch (e) { toast(e.message, 'error'); }
