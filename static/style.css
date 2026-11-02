@@ -250,14 +250,25 @@ tr:hover td { background: #fbf7ec; }
 .audit-tag.other { background: #eee6d8; color: #6b5a3a; }
 .audit-when { white-space: nowrap; color: #6b5a3a; font-size: 12px; }
 .audit-details { white-space: normal; overflow-wrap: anywhere; }
-.audit-table td { vertical-align: top; }
-@media (min-width: 601px) {
+.audit-table td { vertical-align: top; }@media (min-width: 601px) {
   .table-scroll > table.audit-table { width: 100%; table-layout: fixed; }
   .audit-table th:nth-child(1) { width: 21%; }
   .audit-table th:nth-child(2) { width: 14%; }
   .audit-table th:nth-child(3) { width: 21%; }
   .audit-table th:nth-child(4) { width: 14%; }
   .audit-table .audit-tag { white-space: normal; }
+}
+@media (min-width: 601px) {
+  .table-scroll > table.zone-table { width: 100%; table-layout: fixed; }
+  .zone-table th:nth-child(1) { width: 19%; }
+  .zone-table th:nth-child(2) { width: 9%; }
+  .zone-table th:nth-child(3) { width: 10%; }
+  .zone-table th:nth-child(4) { width: 15%; }
+  .zone-table th:nth-child(5) { width: 6%; }
+  .zone-table th:nth-child(6) { width: 11%; }
+  .zone-table th:nth-child(7) { width: 10%; }
+  .zone-table th:nth-child(8) { width: 9%; }
+  .zone-table th:nth-child(9) { width: 11%; }
 }
 
 #modalBackdrop {
@@ -287,6 +298,12 @@ tr:hover td { background: #fbf7ec; }
 #toast.error { background: #b3261e; }
 #toast.success { background: #6f481b; }
 
+.mini-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin: 12px 0 18px; }
+.mini-stat { background: #fbf7ec; border: 1px solid #eee4cf; border-radius: 9px; padding: 10px 12px; }
+.mini-stat .num { font-size: 17px; font-weight: 700; color: #8a5a1f; }
+.mini-stat .lbl { font-size: 11px; color: #8a6d3b; margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
+#modalBox h4 { color: #6b4a1f; margin: 16px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+.zone-row { cursor: pointer; }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px; margin-bottom: 18px; }
 .stat { background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 16px; }
 .stat .num { font-size: 24px; font-weight: 700; color: #8a5a1f; }

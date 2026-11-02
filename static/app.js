@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], auditRows: [] };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [] };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -241,15 +241,37 @@ async function pageScanStrip(onScan, placeholder = 'Scan barcode / ISBN, press E
 }
 
 async function dashboard() {
-  const [stock, sales, tf] = await Promise.all([
+  const canViewZones = hasAnyRole('super_admin', 'zone_admin');
+  const [stock, sales, tf, zones] = await Promise.all([
     api('/api/reports/stock-summary'), api('/api/reports/sales'), api('/api/reports/transfers'),
+    canViewZones ? api('/api/reports/zones') : Promise.resolve([]),
   ]);
+  state.zones = zones;
   const totalUnits = stock.reduce((a, s) => a + (s.total_units || 0), 0);
   const warehouseUnits = stock.filter(s => s.type === 'warehouse' && s.parent_id == null)
     .reduce((a, s) => a + (s.total_units || 0), 0);
   const totalValue = stock.reduce((a, s) => a + (s.stock_value || 0), 0);
   const revenue = sales.reduce((a, s) => a + (s.revenue || 0), 0);
   const open = tf.filter(t => t.status === 'requested').reduce((a, t) => a + t.n, 0);
+  const zoneHtml = canViewZones ? `
+    <div class="card">
+      <h2>Zone overview</h2>
+      <p class="hint">Stock and sales for every zone. Select a zone to see its distributors and their bills.</p>
+      <table class="zone-table">
+        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Cash</th><th>UPI</th><th></th></tr>
+        ${zones.map(z => `<tr class="zone-row" onclick="zoneDetails(${z.id})">
+          <td><strong>${esc(z.name)}</strong><span class="cart-book-barcode">${esc(z.code)}</span></td>
+          <td>${z.stock_units}</td>
+          <td>&#8377;${Number(z.stock_value || 0).toFixed(0)}</td>
+          <td>${z.distributor_count}</td>
+          <td>${z.invoice_count}</td>
+          <td>&#8377;${Number(z.revenue || 0).toFixed(2)}</td>
+          <td>&#8377;${Number(z.cash_total || 0).toFixed(2)}</td>
+          <td>&#8377;${Number(z.upi_total || 0).toFixed(2)}</td>
+          <td><button class="action" onclick="event.stopPropagation(); zoneDetails(${z.id})">View</button></td>
+        </tr>`).join('') || '<tr><td colspan="9" class="hint">No zones found.</td></tr>'}
+      </table>
+    </div>` : '';
   document.getElementById('content').innerHTML = `
     <div class="stats">
       <div class="stat stock-units-stat"><div class="num">${totalUnits}</div><div class="lbl">Total stock (all locations)</div></div>
@@ -258,6 +280,7 @@ async function dashboard() {
       <div class="stat"><div class="num">&#8377;${revenue.toFixed(0)}</div><div class="lbl">Sales revenue</div></div>
       <div class="stat"><div class="num">${open}</div><div class="lbl">Open transfer requests</div></div>
     </div>
+    ${zoneHtml}
     <div class="card stock-summary-card"><h2>Stock summary by location</h2>
       <table class="stock-summary-table"><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
         ${stock.map(s => `<tr><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${(s.stock_value || 0).toFixed(0)}</span></td></tr>`).join('')}
@@ -273,6 +296,84 @@ async function dashboard() {
         ${tf.map(t => `<tr><td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td><td>${t.n}</td></tr>`).join('')}
       </table>
     </div>`;
+}
+
+function miniStat(label, value) {
+  return `<div class="mini-stat"><div class="num">${value}</div><div class="lbl">${esc(label)}</div></div>`;
+}
+
+async function zoneDetails(zoneId) {
+  const z = (state.zones || []).find(x => x.id === zoneId) || {};
+  let distributors;
+  try {
+    distributors = await api('/api/reports/distributors?zone_id=' + zoneId);
+  } catch (e) { toast(e.message, 'error'); return; }
+  state.zoneDistributors = distributors;
+  openModal(`<h3>${esc(z.name || 'Zone')} &mdash; distributors</h3>
+    <p class="hint">${esc(z.code || '')} &middot; ${z.stock_units ?? 0} stock units &middot; ${z.distributor_count ?? distributors.length} active distributor(s)</p>
+    <div class="mini-stats">
+      ${miniStat('Zone revenue', '&#8377;' + Number(z.revenue || 0).toFixed(2))}
+      ${miniStat('Cash', '&#8377;' + Number(z.cash_total || 0).toFixed(2))}
+      ${miniStat('UPI', '&#8377;' + Number(z.upi_total || 0).toFixed(2))}
+      ${miniStat('Bills', z.invoice_count ?? 0)}
+      ${miniStat('Books sold', z.books_sold ?? 0)}
+      ${miniStat('Stock value', '&#8377;' + Number(z.stock_value || 0).toFixed(0))}
+    </div>
+    <h4>Distributors</h4>
+    <table>
+      <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Revenue</th><th>Last sale</th><th></th></tr>
+      ${distributors.map(d => `<tr class="zone-row" onclick="distributorDetails(${d.id}, ${zoneId})">
+        <td><strong>${esc(d.name)}</strong><span class="cart-book-barcode">${esc(d.username)}</span></td>
+        <td>${d.invoice_count}</td>
+        <td>${d.books_sold}</td>
+        <td>&#8377;${Number(d.cash_total || 0).toFixed(2)}</td>
+        <td>&#8377;${Number(d.upi_total || 0).toFixed(2)}</td>
+        <td>&#8377;${Number(d.revenue || 0).toFixed(2)}</td>
+        <td>${d.last_sale ? esc(formatAuditTime(d.last_sale)) : '&mdash;'}</td>
+        <td><button class="action" onclick="event.stopPropagation(); distributorDetails(${d.id}, ${zoneId})">Details</button></td>
+      </tr>`).join('') || '<tr><td colspan="8" class="hint">No distributors assigned to this zone.</td></tr>'}
+    </table>
+    <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`);
+}
+
+async function distributorDetails(userId, zoneId) {
+  let data;
+  try {
+    data = await api('/api/reports/distributors/' + userId);
+  } catch (e) { toast(e.message, 'error'); return; }
+  const d = data.distributor;
+  const s = data.summary;
+  const bookRows = data.books.map(b => `<tr>
+      <td>${esc(b.title)}</td><td>${esc(b.barcode)}</td>
+      <td>${b.qty}</td><td>&#8377;${Number(b.revenue).toFixed(2)}</td>
+    </tr>`).join('') || '<tr><td colspan="4" class="hint">No books sold yet.</td></tr>';
+  const invoiceRows = data.invoices.map(i => `<tr>
+      <td>${esc(i.invoice_number)}</td>
+      <td>${esc(formatAuditTime(i.created_at))}</td>
+      <td>${esc(i.customer_name || '—')}<span class="cart-book-barcode">${esc(i.customer_phone || '')}</span></td>
+      <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
+      <td>${i.books_qty}</td>
+      <td>&#8377;${Number(i.total).toFixed(2)}</td>
+      <td><button class="action" onclick="printInvoice(${i.id})">Print</button></td>
+    </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>';
+  openModal(`<h3>${esc(d.name)}</h3>
+    <p class="hint">@${esc(d.username)} &middot; ${esc(d.zone_name || '—')} &middot; ${d.is_active ? 'Active' : 'Inactive'} &middot; Joined ${esc(formatAuditTime(d.created_at))}</p>
+    <div class="mini-stats">
+      ${miniStat('Total sales', '&#8377;' + Number(s.revenue || 0).toFixed(2))}
+      ${miniStat('Bills', s.invoice_count)}
+      ${miniStat('Cash', '&#8377;' + Number(s.cash_total || 0).toFixed(2))}
+      ${miniStat('UPI', '&#8377;' + Number(s.upi_total || 0).toFixed(2))}
+      ${miniStat('Books sold', s.books_sold)}
+      ${miniStat('Discount given', '&#8377;' + Number(s.discount || 0).toFixed(2))}
+    </div>
+    <h4>Books sold (${data.books.length})</h4>
+    <table><tr><th>Book</th><th>Barcode</th><th>Qty</th><th>Revenue</th></tr>${bookRows}</table>
+    <h4>Invoices (${data.invoices.length})</h4>
+    <table><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Payment</th><th>Qty</th><th>Total</th><th></th></tr>${invoiceRows}</table>
+    <div class="toolbar" style="margin:16px 0 0">
+      <button class="action" onclick="zoneDetails(${zoneId})">Back to distributors</button>
+      <button class="action" onclick="closeModal()">Close</button>
+    </div>`);
 }
 
 let bookQuery = '';

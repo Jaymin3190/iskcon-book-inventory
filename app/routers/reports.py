@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import has_role, require_roles
@@ -92,6 +92,129 @@ def stock_summary(db=Depends(get_db), user=Depends(require_roles("super_admin", 
              WHERE l.id IN ({})
              GROUP BY l.id ORDER BY l.type, l.name""".format(",".join("?" * len(ids)))
     return [dict(r) for r in db.execute(sql, list(ids)).fetchall()]
+
+
+@router.get("/api/reports/zones")
+def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+    ids = location_ids(db, user)
+    sql = """SELECT l.id, l.code, l.name,
+                    (SELECT COUNT(*) FROM stock s WHERE s.location_id = l.id AND s.qty > 0) AS stock_skus,
+                    (SELECT COALESCE(SUM(s.qty),0) FROM stock s WHERE s.location_id = l.id) AS stock_units,
+                    (SELECT COALESCE(SUM(s.qty * b.price),0)
+                       FROM stock s JOIN books b ON b.id = s.book_id
+                      WHERE s.location_id = l.id) AS stock_value,
+                    (SELECT COUNT(*) FROM users u
+                      WHERE u.role = 'distributor' AND u.zone_id = l.id AND u.is_active = 1) AS distributor_count,
+                    (SELECT COUNT(*) FROM invoices i WHERE i.location_id = l.id) AS invoice_count,
+                    (SELECT COALESCE(SUM(i.total),0) FROM invoices i WHERE i.location_id = l.id) AS revenue,
+                    (SELECT COALESCE(SUM(i.total),0) FROM invoices i
+                      WHERE i.location_id = l.id AND i.payment_mode = 'cash') AS cash_total,
+                    (SELECT COALESCE(SUM(i.total),0) FROM invoices i
+                      WHERE i.location_id = l.id AND i.payment_mode = 'upi') AS upi_total,
+                    (SELECT COALESCE(SUM(ii.qty),0)
+                       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+                      WHERE i.location_id = l.id) AS books_sold
+             FROM locations l
+             WHERE l.type = 'zone' AND l.id IN ({})
+             ORDER BY l.name""".format(",".join("?" * len(ids)))
+    return [dict(r) for r in db.execute(sql, list(ids)).fetchall()]
+
+
+@router.get("/api/reports/distributors")
+def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+    ids = location_ids(db, user)
+    if zone_id is not None:
+        if zone_id not in ids:
+            raise HTTPException(403, "Forbidden")
+    elif has_role(user, "zone_admin"):
+        zone_id = user["zone_id"]
+
+    where = "u.role = 'distributor'"
+    params = []
+    if zone_id is not None:
+        where += " AND u.zone_id = ?"
+        params.append(zone_id)
+
+    sql = f"""SELECT u.id, u.name, u.username, u.is_active, u.zone_id, u.created_at,
+                     l.name AS zone_name,
+                     (SELECT COUNT(*) FROM invoices i WHERE i.cashier_id = u.id) AS invoice_count,
+                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i WHERE i.cashier_id = u.id) AS revenue,
+                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i
+                       WHERE i.cashier_id = u.id AND i.payment_mode = 'cash') AS cash_total,
+                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i
+                       WHERE i.cashier_id = u.id AND i.payment_mode = 'upi') AS upi_total,
+                     (SELECT COALESCE(SUM(ii.qty),0)
+                        FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+                       WHERE i.cashier_id = u.id) AS books_sold,
+                     (SELECT MAX(i.created_at) FROM invoices i WHERE i.cashier_id = u.id) AS last_sale
+              FROM users u
+              JOIN locations l ON l.id = u.zone_id
+              WHERE {where}
+              ORDER BY l.name, u.name"""
+    return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
+@router.get("/api/reports/distributors/{user_id}")
+def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+    row = db.execute(
+        """SELECT u.id, u.name, u.username, u.role, u.is_active, u.zone_id, u.created_at,
+                  z.name AS zone_name
+           FROM users u LEFT JOIN locations z ON z.id = u.zone_id
+           WHERE u.id = ?""",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, "User not found")
+    if row["role"] != "distributor":
+        raise HTTPException(400, "Selected user is not a distributor")
+    if not has_role(user, "super_admin") and row["zone_id"] != user["zone_id"]:
+        raise HTTPException(403, "Forbidden")
+
+    summary = db.execute(
+        """SELECT COUNT(*) AS invoice_count,
+                  COALESCE(SUM(total),0) AS revenue,
+                  COALESCE(SUM(subtotal),0) AS subtotal,
+                  COALESCE(SUM(discount),0) AS discount,
+                  COALESCE(SUM(CASE WHEN payment_mode = 'cash' THEN total ELSE 0 END),0) AS cash_total,
+                  COALESCE(SUM(CASE WHEN payment_mode = 'upi' THEN total ELSE 0 END),0) AS upi_total,
+                  COALESCE((SELECT SUM(ii.qty) FROM invoice_items ii
+                              JOIN invoices i2 ON i2.id = ii.invoice_id
+                             WHERE i2.cashier_id = ?),0) AS books_sold,
+                  MAX(created_at) AS last_sale
+           FROM invoices WHERE cashier_id = ?""",
+        (user_id, user_id),
+    ).fetchone()
+
+    invoices = db.execute(
+        """SELECT i.id, i.invoice_number, i.created_at, i.customer_name, i.customer_phone,
+                  i.payment_mode, i.payment_ref, i.status, i.subtotal, i.discount, i.total,
+                  l.name AS location_name,
+                  (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS line_count,
+                  (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
+           FROM invoices i JOIN locations l ON l.id = i.location_id
+           WHERE i.cashier_id = ?
+           ORDER BY i.id DESC""",
+        (user_id,),
+    ).fetchall()
+
+    books = db.execute(
+        """SELECT b.id AS book_id, b.title, b.barcode,
+                  COALESCE(SUM(ii.qty),0) AS qty,
+                  COALESCE(SUM(ii.line_total),0) AS revenue
+           FROM invoice_items ii
+           JOIN invoices i ON i.id = ii.invoice_id
+           JOIN books b ON b.id = ii.book_id
+           WHERE i.cashier_id = ?
+           GROUP BY b.id ORDER BY revenue DESC""",
+        (user_id,),
+    ).fetchall()
+
+    return {
+        "distributor": dict(row),
+        "summary": dict(summary),
+        "invoices": [dict(r) for r in invoices],
+        "books": [dict(r) for r in books],
+    }
 
 
 @router.get("/api/reports/transfers")

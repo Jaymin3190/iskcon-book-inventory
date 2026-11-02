@@ -287,6 +287,35 @@ check("audit search filter", code == 200 and len(filtered_audit) > 0 and all(
 code, login_audit = call("GET", "/api/audit?action=LOGIN", token=super_t)
 check("audit action filter", code == 200 and len(login_audit) > 0 and all(row["action"] == "LOGIN" for row in login_audit))
 
+# --- zone overview and distributor drill-down ---
+code, zones = call("GET", "/api/reports/zones", token=super_t)
+check("zone overview lists every zone", code == 200 and len(zones) == 6, zones)
+zone2 = next((z for z in zones if z["id"] == 2), {})
+check("zone overview includes stock and cash/UPI totals", zone2.get("stock_units", 0) > 0
+      and zone2.get("stock_value", 0) > 0 and zone2.get("distributor_count") == 1
+      and zone2.get("invoice_count") == 2 and zone2.get("revenue") == 1300.0
+      and zone2.get("cash_total") == 900.0 and zone2.get("upi_total") == 400.0, zone2)
+code, my_zones = call("GET", "/api/reports/zones", token=zone_t)
+check("zone admin sees only own zone", code == 200 and len(my_zones) == 1 and my_zones[0]["id"] == 2)
+code, _ = call("GET", "/api/reports/zones", token=temple_t)
+check("temple user cannot view zone overview", code == 403)
+
+code, zone_distributors = call("GET", "/api/reports/distributors?zone_id=2", token=zone_t)
+check("zone admin sees distributor totals", code == 200 and any(
+    d["username"] == "distributor" and d["invoice_count"] == 1 and d["revenue"] == 400.0
+    and d["upi_total"] == 400.0 and d["cash_total"] == 0 and d["books_sold"] == 4
+    for d in zone_distributors
+), zone_distributors)
+code, _ = call("GET", "/api/reports/distributors?zone_id=3", token=zone_t)
+check("zone admin cannot list another zone's distributors", code == 403)
+code, dist_detail = call("GET", f"/api/reports/distributors/{dist_me['user']['id']}", token=zone_t)
+check("distributor detail includes invoices and books", code == 200
+      and dist_detail["distributor"]["username"] == "distributor"
+      and len(dist_detail["invoices"]) == 1 and len(dist_detail["books"]) == 1
+      and dist_detail["books"][0]["qty"] == 4 and dist_detail["summary"]["revenue"] == 400.0, dist_detail)
+code, _ = call("GET", f"/api/reports/distributors/{dist_me['user']['id']}", token=other_zone_t)
+check("other zone admin cannot view distributor detail", code == 403)
+
 # --- catalogue CRUD ---
 code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)
 check("book search filters by title", code == 200 and len(found) == 1 and found[0]["id"] == 1)
