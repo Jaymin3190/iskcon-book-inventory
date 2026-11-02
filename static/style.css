@@ -241,6 +241,24 @@ tr:hover td { background: #fbf7ec; }
 .badge.processed { background: #ead9c3; color: #6f481b; }
 .badge.open { background: #fde9b8; color: #7a5a00; }
 .badge.completed { background: #ead9c3; color: #6f481b; }
+.audit-tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.audit-tag.create { background: #dff2e2; color: #1d6b35; }
+.audit-tag.delete { background: #f9dcd9; color: #94231c; }
+.audit-tag.update { background: #dfe9fb; color: #1f4f92; }
+.audit-tag.auth { background: #ece3f9; color: #5b32a0; }
+.audit-tag.stock { background: #fdebc9; color: #7a5200; }
+.audit-tag.other { background: #eee6d8; color: #6b5a3a; }
+.audit-when { white-space: nowrap; color: #6b5a3a; font-size: 12px; }
+.audit-details { white-space: normal; overflow-wrap: anywhere; }
+.audit-table td { vertical-align: top; }
+@media (min-width: 601px) {
+  .table-scroll > table.audit-table { width: 100%; table-layout: fixed; }
+  .audit-table th:nth-child(1) { width: 21%; }
+  .audit-table th:nth-child(2) { width: 14%; }
+  .audit-table th:nth-child(3) { width: 21%; }
+  .audit-table th:nth-child(4) { width: 14%; }
+  .audit-table .audit-tag { white-space: normal; }
+}
 
 #modalBackdrop {
   position: fixed; inset: 0; background: rgba(30,20,5,.55);

@@ -14,7 +14,7 @@ from ..services.scope import location_ids
 
 router = APIRouter(prefix="/api/pos", tags=["pos"])
 
-PAYMENT_MODES = ("cash", "upi", "card", "ledger")
+PAYMENT_MODES = ("cash", "upi")
 
 
 class InvoiceItemIn(BaseModel):
@@ -26,7 +26,6 @@ class InvoiceIn(BaseModel):
     location_id: Optional[int] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
-    customer_email: Optional[str] = None
     payment_mode: str = "cash"
     payment_ref: Optional[str] = None
     discount: float = 0
@@ -55,6 +54,12 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(400, "Cart is empty")
     if data.payment_mode not in PAYMENT_MODES:
         raise HTTPException(400, f"Invalid payment mode. Valid: {', '.join(PAYMENT_MODES)}")
+    customer_name = (data.customer_name or "").strip()
+    customer_phone = (data.customer_phone or "").strip()
+    if not customer_name:
+        raise HTTPException(400, "Customer name is required")
+    if not customer_phone:
+        raise HTTPException(400, "Phone number is required")
     if user["role"] != "super_admin":
         loc_id = user["zone_id"]
         if not loc_id or (data.location_id is not None and data.location_id != loc_id):
@@ -93,10 +98,10 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
 
     num = f"INV-{loc['code']}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
     cur = db.execute(
-        """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone, customer_email,
+        """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone,
                                  payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)
-           VALUES (?,?,?,?,?,?,?, 'paid', ?, ?, ?, ?)""",
-        (num, loc_id, data.customer_name, data.customer_phone, data.customer_email,
+           VALUES (?,?,?,?,?,?, 'paid', ?, ?, ?, ?)""",
+        (num, loc_id, customer_name, customer_phone,
          data.payment_mode, data.payment_ref, subtotal, discount, total, user["id"]),
     )
     iid = cur.lastrowid
@@ -162,7 +167,7 @@ def invoice_html(inv, items, org_name="ISKCON"):
       <div class="sub">{inv['location_name']} &mdash; {inv['invoice_number']}</div>
       <div class="sub">Date: {inv['created_at']} &nbsp;|&nbsp; Cashier: {inv['cashier_name'] or '-'}</div>
     </div>
-    <div class="sub">Customer: {inv['customer_name'] or '-'} {inv['customer_phone'] or ''} {inv['customer_email'] or ''}</div>
+    <div class="sub">Customer: {inv['customer_name'] or '-'} {inv['customer_phone'] or ''}</div>
     <table>
       <tr><th>Title</th><th>Qty</th><th class="r">Unit Price</th><th class="r">Amount</th></tr>
       {rows}

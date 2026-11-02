@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [] };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], auditRows: [] };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -32,6 +32,7 @@ const TABS = [
   { id: 'returns', label: 'Returns', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'pos', label: 'POS Billing', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
   { id: 'reports', label: 'Reports', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'audit', label: 'Audit Trail', roles: ['super_admin', 'zone_admin'] },
   { id: 'users', label: 'Users', roles: ['super_admin', 'zone_admin'] },
   { id: 'locations', label: 'Locations', roles: ['super_admin'] },
 ];
@@ -40,7 +41,7 @@ const TAB_GROUPS = [
   { label: 'Overview', tabs: ['dashboard'] },
   { label: 'Catalogue', tabs: ['books', 'stock'] },
   { label: 'Operations', tabs: ['transfers', 'returns', 'pos'] },
-  { label: 'Insights', tabs: ['reports'] },
+  { label: 'Insights', tabs: ['reports', 'audit'] },
   { label: 'Administration', tabs: ['users', 'locations'] },
 ];
 
@@ -52,6 +53,7 @@ const NAV_ICONS = {
   returns: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>',
   pos: '<circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M2 3h3l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 7H6"/>',
   reports: '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+  audit: '<path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/><path d="M8 11h8"/><path d="M8 15h8"/><path d="M8 19h5"/>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/>',
   locations: '<path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
 };
@@ -63,7 +65,7 @@ function navButton(tab) {
   </button>`;
 }
 
-const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, reports, users, locations };
+const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, reports, audit, users, locations };
 
 function renderCurrentTab() {
   return RENDER[state.activeTab]().then(() => {
@@ -768,14 +770,13 @@ async function pos() {
       </table>
       <div id="cartEmpty" style="color:#8a6d3b;font-size:13px;margin-top:8px">Cart is empty. Scan a book to begin.</div>
       <div class="form-grid" style="margin-top:14px">
-        <div class="form-row"><label>Customer name</label><input id="custName"></div>
-        <div class="form-row"><label>Phone</label><input id="custPhone"></div>
-        <div class="form-row"><label>Email</label><input id="custEmail"></div>
+        <div class="form-row"><label>Customer name *</label><input id="custName" required></div>
+        <div class="form-row"><label>Phone *</label><input id="custPhone" type="tel" required></div>
         <div class="form-row"><label>Payment mode</label>
-          <select id="payMode" onchange="toggleUpiQr()"><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option><option value="ledger">Credit / Ledger</option></select>
+          <select id="payMode" onchange="toggleUpiQr()"><option value="cash">Cash</option><option value="upi">UPI</option></select>
         </div>
         <div class="form-row"><label>Payment ref (optional)</label><input id="payRef"></div>
-        <div class="form-row"><label>Discount (&#8377;)</label><input id="discount" type="number" min="0" value="0" oninput="renderCart()"></div>
+        <div class="form-row"><label>Discount (&#8377;)</label><input id="discount" type="number" min="0" value="" oninput="renderCart()"></div>
       </div>
       <div id="upiQrPanel" class="upi-qr-panel" hidden>
         <p>Scan this QR code to pay with UPI.</p>
@@ -783,7 +784,7 @@ async function pos() {
       </div>
       <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
         <div><strong>Total:</strong> <span id="cartTotal">&#8377;0.00</span></div>
-        <button class="primary" onclick="checkout()">Checkout</button>
+        <button class="primary" onclick="checkout()">Save / Share</button>
       </div>
     </div>`;
   renderCart();
@@ -1232,14 +1233,15 @@ document.addEventListener('visibilitychange', () => {
 async function checkout() {
   if (!state.cart.length) { toast('Cart is empty', 'error'); return; }
   const custName = document.getElementById('custName').value.trim();
+  const custPhone = document.getElementById('custPhone').value.trim();
   const payMode = document.getElementById('payMode').value;
   const payRef = document.getElementById('payRef').value.trim();
-  if (payMode === 'ledger' && !custName) return toast('Customer name required for ledger (credit) billing', 'error');
+  if (!custName) return toast('Customer name is required', 'error');
+  if (!custPhone) return toast('Phone number is required', 'error');
   try {
     const res = await api('/api/pos/invoices', { method: 'POST', body: {
       location_id: state.user.role !== 'super_admin' ? state.user.zone_id : Number(document.getElementById('billLoc').value),
-      customer_name: custName, customer_phone: document.getElementById('custPhone').value,
-      customer_email: document.getElementById('custEmail').value,
+      customer_name: custName, customer_phone: custPhone,
       payment_mode: payMode, payment_ref: payRef,
       discount: Number(document.getElementById('discount').value) || 0,
       items: state.cart.map(i => ({ barcode: i.barcode, qty: i.qty })),
@@ -1256,13 +1258,15 @@ async function checkout() {
 
 async function printInvoice(invoiceId) {
   const w = window.open('', '_blank');
-  if (!w) { toast('Allow pop-ups to print the invoice', 'error'); return; }
+  if (!w) { toast('Allow pop-ups to open the invoice in a new tab', 'error'); return; }
   try {
     const res = await fetch('/api/pos/invoices/' + invoiceId + '/print', { headers: { Authorization: 'Bearer ' + state.token } });
     if (!res.ok) throw new Error('Could not load invoice');
     const html = await res.text();
-    w.document.write(html);
-    w.document.close();
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    w.location.href = url;
+    w.focus();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   } catch (e) {
     try { w.close(); } catch (_) {}
     toast(e.message, 'error');
@@ -1299,14 +1303,8 @@ async function reports() {
     canViewDistributorSales ? api('/api/reports/distributor-sales') : Promise.resolve([]),
   ]);
   state.distributorSales = distributorSales;
-  let auditHtml = '';
   let distributorSalesHtml = '';
   if (canViewDistributorSales) {
-    const audit = await api('/api/audit?limit=50');
-    auditHtml = `<div class="card"><h2>Audit trail</h2><table>
-      <tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Details</th></tr>
-      ${audit.map(a => `<tr><td>${esc(a.created_at)}</td><td>${esc(a.username || '')}</td><td>${esc(a.action)}</td><td>${esc(a.entity || '')}${a.entity_id ? ' #' + a.entity_id : ''}</td><td>${esc(a.details || '')}</td></tr>`).join('')}
-    </table></div>`;
     distributorSalesHtml = `<div class="card">
       <h2>Distributor sales by bill</h2>
       <div class="toolbar">
@@ -1335,8 +1333,144 @@ async function reports() {
     <div class="card"><h2>Transfers by status</h2>
       <table><tr><th>Status</th><th>Count</th></tr>
         ${tf.map(t => `<tr><td>${esc(t.status)}</td><td>${t.n}</td></tr>`).join('')}
-      </table></div>
-    ${auditHtml}`;
+      </table></div>`;
+}
+
+const AUDIT_ACTION_LABELS = {
+  LOGIN: 'Signed in',
+  INVOICE_CREATE: 'Sale billed',
+  INVOICE_DELETE: 'Invoice deleted',
+  BOOK_CREATE: 'Book added',
+  BOOK_UPDATE: 'Book updated',
+  BOOK_DELETE: 'Book deleted',
+  USER_CREATE: 'User added',
+  USER_UPDATE: 'User updated',
+  USER_DELETE: 'User deleted',
+  LOCATION_CREATE: 'Location added',
+  LOCATION_UPDATE: 'Location updated',
+  LOCATION_DELETE: 'Location deleted',
+  STOCK_ADJUST: 'Stock adjusted',
+  STOCK_COUNT_START: 'Stock count started',
+  STOCK_COUNT_COMPLETE: 'Stock count completed',
+  STOCK_COUNT_DELETE: 'Stock count deleted',
+  TRANSFER_REQUEST: 'Transfer requested',
+  TRANSFER_APPROVE: 'Transfer approved',
+  TRANSFER_REJECT: 'Transfer rejected',
+  TRANSFER_DISPATCH: 'Transfer dispatched',
+  TRANSFER_RECEIVE: 'Transfer received',
+  TRANSFER_DELETE: 'Transfer deleted',
+  RETURN_CREATE: 'Return recorded',
+  RETURN_PROCESS: 'Return processed',
+  RETURN_DELETE: 'Return deleted',
+  DAMAGED_WRITEOFF: 'Damaged stock written off',
+  DAMAGED_DELETE: 'Damaged write-off deleted',
+};
+
+const AUDIT_ENTITY_LABELS = {
+  invoices: 'Invoice', books: 'Book', book: 'Book', users: 'User', user: 'User',
+  locations: 'Location', location: 'Location', stock: 'Stock', stock_counts: 'Stock count',
+  transfers: 'Transfer', returns: 'Return', damaged: 'Damaged stock',
+};
+
+function auditActionLabel(action) {
+  return AUDIT_ACTION_LABELS[action] || String(action || '—').toLowerCase().replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
+}
+
+function auditActionClass(action) {
+  const a = String(action || '');
+  if (a === 'LOGIN') return 'auth';
+  if (a.startsWith('STOCK')) return 'stock';
+  if (a.includes('DELETE')) return 'delete';
+  if (a.includes('CREATE') || a.includes('REQUEST') || a.includes('RECEIVE') || a.includes('PROCESS') || a.includes('WRITEOFF') || a.includes('ADJUST')) return 'create';
+  if (a.includes('UPDATE') || a.includes('APPROVE') || a.includes('DISPATCH') || a.includes('COMPLETE')) return 'update';
+  return 'other';
+}
+
+function auditEntityLabel(entity) {
+  if (!entity) return '—';
+  return AUDIT_ENTITY_LABELS[entity] || String(entity).replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
+}
+
+function formatAuditTime(value) {
+  if (!value) return '';
+  const raw = String(value);
+  const d = new Date(raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z');
+  if (isNaN(d)) return raw;
+  return d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+let auditTimer = null;
+function debounceAuditSearch() {
+  clearTimeout(auditTimer);
+  auditTimer = setTimeout(loadAudit, 300);
+}
+
+function auditFilters() {
+  return {
+    q: document.getElementById('auditSearch')?.value.trim() || '',
+    action: document.getElementById('auditAction')?.value || '',
+    username: document.getElementById('auditUser')?.value || '',
+    frm: document.getElementById('auditFrom')?.value || '',
+    to: document.getElementById('auditTo')?.value || '',
+  };
+}
+
+async function audit() {
+  const options = await api('/api/audit/options');
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      <h2>Audit trail</h2>
+      <p class="hint">Every important change is recorded here, with who made it and when.</p>
+      <div class="toolbar">
+        <input id="auditSearch" placeholder="Search user, action or details" style="flex:1;min-width:200px" oninput="debounceAuditSearch()">
+        <select id="auditAction" onchange="loadAudit()"><option value="">All actions</option>${options.actions.map(a => `<option value="${esc(a.action)}">${esc(auditActionLabel(a.action))} (${a.n})</option>`).join('')}</select>
+        <select id="auditUser" onchange="loadAudit()"><option value="">All users</option>${options.users.map(u => `<option value="${esc(u.username)}">${esc(u.username)} (${u.n})</option>`).join('')}</select>
+        <label>From <input id="auditFrom" type="date" onchange="loadAudit()"></label>
+        <label>To <input id="auditTo" type="date" onchange="loadAudit()"></label>
+        <button class="action" onclick="clearAuditFilters()">Clear filters</button>
+      </div>
+      <div id="auditMeta" class="hint"></div>
+      <table class="audit-table">
+        <thead><tr><th>When</th><th>User</th><th>Action</th><th>Record</th><th>Details</th></tr></thead>
+        <tbody id="auditRows"></tbody>
+      </table>
+    </div>`;
+  await loadAudit();
+}
+
+async function loadAudit() {
+  const f = auditFilters();
+  if (f.frm && f.to && f.frm > f.to) { toast('From date cannot be after To date', 'error'); return; }
+  const params = new URLSearchParams({ limit: '500' });
+  if (f.q) params.set('q', f.q);
+  if (f.action) params.set('action', f.action);
+  if (f.username) params.set('username', f.username);
+  if (f.frm) params.set('frm', f.frm);
+  if (f.to) params.set('to', f.to);
+  try {
+    const rows = await api('/api/audit?' + params.toString());
+    state.auditRows = rows;
+    const body = document.getElementById('auditRows');
+    if (!body) return;
+    body.innerHTML = rows.map(a => `<tr>
+      <td class="audit-when">${esc(formatAuditTime(a.created_at))}</td>
+      <td>${esc(a.username || '—')}</td>
+      <td><span class="audit-tag ${auditActionClass(a.action)}">${esc(auditActionLabel(a.action))}</span></td>
+      <td>${esc(auditEntityLabel(a.entity))}${a.entity_id ? ' #' + a.entity_id : ''}</td>
+      <td class="audit-details" title="${esc(a.details || '')}">${esc(a.details || '—')}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="hint">No audit entries match these filters.</td></tr>';
+    const meta = document.getElementById('auditMeta');
+    if (meta) meta.textContent = `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} shown` +
+      (rows.length >= 500 ? ' — showing the most recent 500, narrow the filters to see older entries' : '');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function clearAuditFilters() {
+  ['auditSearch', 'auditAction', 'auditUser', 'auditFrom', 'auditTo'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  loadAudit();
 }
 
 function renderDistributorSalesRows(rows) {
@@ -1480,14 +1614,30 @@ async function userDelete(userId) {
 
 async function locations() {
   const rows = await api('/api/locations');
+  state.locations = rows;
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar"><button class="primary" onclick="locationForm()">+ New location</button></div>
       <table>
         <tr><th>Code</th><th>Name</th><th>Type</th><th>Parent</th><th>Actions</th></tr>
-        ${rows.map(l => `<tr><td>${esc(l.code)}</td><td>${esc(l.name)}</td><td>${esc(l.type)}</td><td>${esc(l.parent_name || '')}</td><td><button class="danger" onclick="locationDelete(${l.id})">Delete</button></td></tr>`).join('')}
+        ${rows.map(l => `<tr><td>${esc(l.code)}</td><td>${esc(l.name)}</td><td>${esc(l.type)}</td><td>${esc(l.parent_name || '')}</td><td><button class="action" onclick="locationForm(${l.id})">Edit</button><button class="danger" onclick="locationDelete(${l.id})">Delete</button></td></tr>`).join('')}
       </table>
     </div>`;
+}
+
+function locationDescendants(rows, locationId) {
+  const ids = new Set([locationId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    rows.forEach(l => {
+      if (l.parent_id != null && ids.has(l.parent_id) && !ids.has(l.id)) {
+        ids.add(l.id);
+        changed = true;
+      }
+    });
+  }
+  return ids;
 }
 
 async function locationDelete(locationId) {
@@ -1498,31 +1648,44 @@ async function locationDelete(locationId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function locationForm() {
-  const rows = await api('/api/locations');
-  openModal(`<h3>New location</h3>
+async function locationForm(locationId = null) {
+  const rows = state.locations || await api('/api/locations');
+  const l = locationId ? rows.find(x => x.id === locationId) : null;
+  const excluded = l ? locationDescendants(rows, l.id) : new Set();
+  const parents = rows.filter(x => !excluded.has(x.id));
+  const type = l?.type || 'warehouse';
+  openModal(`<h3>${l ? 'Edit location — ' + esc(l.name) : 'New location'}</h3>
     <div class="form-grid">
-      <div class="form-row"><label>Code *</label><input id="lCode" placeholder="e.g. Z3"></div>
-      <div class="form-row"><label>Name *</label><input id="lName"></div>
+      <div class="form-row"><label>Code *</label><input id="lCode" placeholder="e.g. Z3" value="${esc(l?.code || '')}"></div>
+      <div class="form-row"><label>Name *</label><input id="lName" value="${esc(l?.name || '')}"></div>
       <div class="form-row"><label>Type</label>
-        <select id="lType"><option value="warehouse">Warehouse</option><option value="zone">Zone</option><option value="store">Temple / Store</option></select>
+        <select id="lType"><option value="warehouse" ${type === 'warehouse' ? 'selected' : ''}>Warehouse</option><option value="zone" ${type === 'zone' ? 'selected' : ''}>Zone</option><option value="store" ${type === 'store' ? 'selected' : ''}>Temple / Store</option></select>
       </div>
       <div class="form-row"><label>Parent (for Zone/Store)</label>
-        <select id="lParent"><option value="">— none —</option>${rows.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>
+        <select id="lParent"><option value="">— none —</option>${parents.map(p => `<option value="${p.id}" ${String(l?.parent_id) === String(p.id) ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)})</option>`).join('')}</select>
       </div>
     </div>
-    <button class="primary" onclick="locationCreate()">Create</button>`);
+    <button class="primary" onclick="locationSave(${l ? l.id : 'null'})">${l ? 'Save changes' : 'Create'}</button>`);
 }
 
-async function locationCreate() {
+async function locationSave(locationId) {
+  const body = {
+    code: document.getElementById('lCode').value.trim(),
+    name: document.getElementById('lName').value.trim(),
+    type: document.getElementById('lType').value,
+    parent_id: Number(document.getElementById('lParent').value) || null,
+  };
+  if (!body.code) { toast('Location code is required', 'error'); return; }
+  if (!body.name) { toast('Location name is required', 'error'); return; }
   try {
-    await api('/api/locations', { method: 'POST', body: {
-      code: document.getElementById('lCode').value.trim(),
-      name: document.getElementById('lName').value.trim(),
-      type: document.getElementById('lType').value,
-      parent_id: Number(document.getElementById('lParent').value) || null,
-    }});
-    closeModal(); toast('Location created', 'success'); refreshCurrent();
+    if (locationId) {
+      await api('/api/locations/' + locationId, { method: 'PATCH', body });
+      toast('Location updated', 'success');
+    } else {
+      await api('/api/locations', { method: 'POST', body });
+      toast('Location created', 'success');
+    }
+    closeModal(); refreshCurrent();
   } catch (e) { toast(e.message, 'error'); }
 }
 

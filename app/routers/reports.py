@@ -120,17 +120,70 @@ class AuditFilter(BaseModel):
     limit: int = 100
 
 
-@router.get("/api/audit")
-def audit_trail(limit: int = 100, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+def _audit_scope(user):
     if has_role(user, "zone_admin"):
-        zone_ids = location_ids(db, user)
-        return [dict(r) for r in db.execute(
-            """SELECT a.* FROM audit_logs a
-               WHERE a.action IN ('LOGIN') OR a.username = ? OR a.user_id = ?
-               ORDER BY a.id DESC LIMIT ?""",
-            (user["username"], user["id"], min(limit, 500)),
-        ).fetchall()]
-    return [dict(r) for r in db.execute(
-        "SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?",
-        (min(limit, 500),),
-    ).fetchall()]
+        return "(a.action = 'LOGIN' OR a.username = ? OR a.user_id = ?)", [user["username"], user["id"]]
+    return None, []
+
+
+def _audit_where(user, q=None, action=None, entity=None, username=None, frm=None, to=None):
+    where = []
+    params = []
+    scope, scope_params = _audit_scope(user)
+    if scope:
+        where.append(scope)
+        params.extend(scope_params)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        where.append("(a.username LIKE ? OR a.action LIKE ? OR a.entity LIKE ? OR a.details LIKE ?)")
+        params.extend([like, like, like, like])
+    if action:
+        where.append("a.action = ?")
+        params.append(action)
+    if entity:
+        where.append("a.entity = ?")
+        params.append(entity)
+    if username:
+        where.append("a.username = ?")
+        params.append(username)
+    if frm:
+        where.append("date(a.created_at) >= date(?)")
+        params.append(frm)
+    if to:
+        where.append("date(a.created_at) <= date(?)")
+        params.append(to)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    return clause, params
+
+
+@router.get("/api/audit")
+def audit_trail(limit: int = 100, offset: int = 0, q: str = None, action: str = None,
+                entity: str = None, username: str = None, frm: str = None, to: str = None,
+                db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+    clause, params = _audit_where(user, q, action, entity, username, frm, to)
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    sql = f"SELECT a.* FROM audit_logs a{clause} ORDER BY a.id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
+@router.get("/api/audit/options")
+def audit_options(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+    clause, params = _audit_scope(user)
+    where = f" WHERE {clause}" if clause else ""
+    actions = [
+        dict(r) for r in db.execute(
+            f"SELECT a.action, COUNT(*) AS n FROM audit_logs a{where} GROUP BY a.action ORDER BY a.action",
+            params,
+        ).fetchall()
+    ]
+    users = [
+        dict(r) for r in db.execute(
+            f"SELECT a.username, COUNT(*) AS n FROM audit_logs a{where}"
+            f"{' AND' if where else ' WHERE'} a.username IS NOT NULL AND a.username != '' "
+            "GROUP BY a.username ORDER BY a.username",
+            params,
+        ).fetchall()
+    ]
+    return {"actions": actions, "users": users}

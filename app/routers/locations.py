@@ -18,6 +18,13 @@ class LocationIn(BaseModel):
     parent_id: Optional[int] = None
 
 
+class LocationPatch(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    type: Optional[str] = None
+    parent_id: Optional[int] = None
+
+
 @router.get("")
 def list_locations(type: str = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     ids = location_ids(db, user)
@@ -59,6 +66,61 @@ def create_location(data: LocationIn, db=Depends(get_db), user=Depends(require_r
     db.commit()
     log_audit(db, user["id"], "LOCATION_CREATE", "location", cur.lastrowid, data.name, user["username"])
     return {"id": cur.lastrowid, "code": data.code}
+
+
+@router.patch("/{location_id}")
+def update_location(location_id: int, data: LocationPatch, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
+    row = db.execute("SELECT * FROM locations WHERE id = ?", (location_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Location not found")
+
+    changes = data.model_dump(exclude_unset=True)
+    if not changes:
+        return {"ok": True}
+
+    code = (changes.get("code", row["code"]) or "").strip()
+    name = (changes.get("name", row["name"]) or "").strip()
+    new_type = changes.get("type", row["type"])
+    parent_id = changes.get("parent_id", row["parent_id"])
+
+    if not code:
+        raise HTTPException(400, "Location code is required")
+    if not name:
+        raise HTTPException(400, "Location name is required")
+    if new_type not in ("warehouse", "zone", "store"):
+        raise HTTPException(400, "Invalid location type")
+
+    dup = db.execute("SELECT id FROM locations WHERE code = ? AND id != ?", (code, location_id)).fetchone()
+    if dup:
+        raise HTTPException(409, "Location code already exists")
+
+    if parent_id is not None:
+        if parent_id == location_id:
+            raise HTTPException(400, "A location cannot be its own parent")
+        parent = db.execute("SELECT id, parent_id FROM locations WHERE id = ?", (parent_id,)).fetchone()
+        if not parent:
+            raise HTTPException(400, "Parent location not found")
+        seen = {location_id}
+        current = parent
+        while current is not None:
+            if current["id"] in seen:
+                raise HTTPException(400, "Parent selection would create a loop")
+            seen.add(current["id"])
+            current = db.execute(
+                "SELECT id, parent_id FROM locations WHERE id = ?", (current["parent_id"],)
+            ).fetchone() if current["parent_id"] is not None else None
+
+    db.execute(
+        "UPDATE locations SET code = ?, name = ?, type = ?, parent_id = ? WHERE id = ?",
+        (code, name, new_type, parent_id, location_id),
+    )
+    db.commit()
+    log_audit(
+        db, user["id"], "LOCATION_UPDATE", "location", location_id,
+        f"{row['code']} / {row['name']} -> {code} / {name} ({new_type})",
+        user["username"],
+    )
+    return {"ok": True}
 
 
 @router.delete("/{location_id}")

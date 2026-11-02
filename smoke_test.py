@@ -91,6 +91,7 @@ check("stock summary identifies warehouse availability", sum(
 ) == 100)
 
 code, admin_invoice = call("POST", "/api/pos/invoices", token=super_t, body={
+    "customer_name": "Walk-in", "customer_phone": "9999999999",
     "payment_mode": "cash", "items": [{"barcode": "9780892139523", "qty": 1}],
 })
 check("super admin can bill without an assigned location", code == 200 and admin_invoice["invoice_number"].startswith("INV-TEMPLE-"), admin_invoice)
@@ -142,8 +143,8 @@ check("duplicate transfer lines cannot exceed warehouse stock", code == 400)
 
 # --- POS billing at temple ---
 code, inv = call("POST", "/api/pos/invoices", token=temple_t, body={
-    "location_id": None, "customer_name": None, "customer_phone": None,
-    "customer_email": None, "payment_ref": None, "payment_mode": "cash",
+    "location_id": None, "customer_name": "Walk-in", "customer_phone": "9999999999",
+    "payment_ref": None, "payment_mode": "cash",
     "items": [{"barcode": "9780892132517", "qty": 2}],
 })
 check("zone-mapped temple POS invoice (2 x 450)", code == 200 and inv["total"] == 900.0, inv)
@@ -153,25 +154,27 @@ _, ts = call("GET", "/api/stock?location_id=2", token=super_t)
 check("stock decremented on sale", qty(ts, 2, 2) == 8)
 
 code, _ = call("POST", "/api/pos/invoices", token=temple_t, body={
+    "customer_name": "Walk-in", "customer_phone": "9999999999",
     "items": [{"barcode": "9780892131343", "qty": 9999}],
 })
 check("oversell rejected", code == 400)
 code, _ = call("POST", "/api/pos/invoices", token=temple_t, body={
+    "customer_name": "Walk-in", "customer_phone": "9999999999",
     "items": [{"barcode": "9780892131343", "qty": 3}, {"barcode": "9780892131343", "qty": 3}],
 })
 check("duplicate invoice lines cannot oversell available stock", code == 400)
 
 code, _ = call("POST", "/api/pos/invoices", token=dist_t, body={
-    "location_id": 1, "payment_mode": "cash",
+    "location_id": 1, "customer_name": "Walk-in", "customer_phone": "9999999999", "payment_mode": "cash",
     "items": [{"barcode": "9780892131565", "qty": 1}],
 })
 check("distributor cannot bill from warehouse", code == 403)
 
 code, led = call("POST", "/api/pos/invoices", token=dist_t, body={
-    "customer_name": "Temple Zone", "payment_mode": "ledger",
+    "customer_name": "Temple Zone", "customer_phone": "9999999999", "payment_mode": "upi",
     "items": [{"barcode": "9780892131565", "qty": 4}],
 })
-check("distributor ledger billing at zone", code == 200 and led["total"] == 400.0, led)
+check("distributor billing at zone", code == 200 and led["total"] == 400.0, led)
 code, dist_invoices = call("GET", "/api/pos/invoices", token=dist_t)
 _, dist_me = call("GET", "/api/auth/me", token=dist_t)
 check("distributor invoice history includes only own bills",
@@ -200,7 +203,7 @@ check("distributor cannot access sales reports", code == 403)
 code, zone_sales = call("GET", "/api/reports/distributor-sales", token=zone_t)
 check("zone leader sees distributor book and payment sales", code == 200 and any(
     row["invoice_number"] == led["invoice_number"] and row["distributor_name"] == "Distributor"
-    and row["book_title"] == "Raja-vidya" and row["payment_mode"] == "ledger" and row["qty"] == 4
+    and row["book_title"] == "Raja-vidya" and row["payment_mode"] == "upi" and row["qty"] == 4
     for row in zone_sales
 ), zone_sales)
 code, admin_sales = call("GET", "/api/reports/distributor-sales", token=super_t)
@@ -274,6 +277,15 @@ _, ssum = call("GET", "/api/reports/stock-summary", token=super_t)
 check("stock summary lists all 7 locations", len(ssum) == 7)
 _, trail = call("GET", "/api/audit", token=super_t)
 check("audit trail logged actions", len(trail) >= 10)
+code, audit_opts = call("GET", "/api/audit/options", token=super_t)
+check("audit filter options available", code == 200 and len(audit_opts["actions"]) > 0 and len(audit_opts["users"]) > 0)
+code, filtered_audit = call("GET", "/api/audit?q=LOGIN&limit=500", token=super_t)
+check("audit search filter", code == 200 and len(filtered_audit) > 0 and all(
+    "LOGIN" in " ".join(str(row.get(k) or "") for k in ("username", "action", "entity", "details")).upper()
+    for row in filtered_audit
+))
+code, login_audit = call("GET", "/api/audit?action=LOGIN", token=super_t)
+check("audit action filter", code == 200 and len(login_audit) > 0 and all(row["action"] == "LOGIN" for row in login_audit))
 
 # --- catalogue CRUD ---
 code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)
@@ -316,6 +328,20 @@ check("location creation", code == 200 and created_location["code"] == "SMOKE-LO
 test_location_id = created_location.get("id")
 code, store_locations = call("GET", "/api/locations?type=store", token=super_t)
 check("location type filter", code == 200 and any(l["id"] == test_location_id for l in store_locations))
+code, _ = call("PATCH", f"/api/locations/{test_location_id}", token=zone_t, body={"name": "Nope"})
+check("only super admin can edit locations", code == 403)
+code, _ = call("PATCH", f"/api/locations/{test_location_id}", token=super_t, body={
+    "code": "SMOKE-LOC-2", "name": "Smoke Test Location Updated", "type": "zone", "parent_id": None,
+})
+check("location edit updates all fields", code == 200)
+code, edited_location = call("GET", f"/api/locations/{test_location_id}", token=super_t)
+check("edited location fields persisted", code == 200 and edited_location["code"] == "SMOKE-LOC-2"
+      and edited_location["name"] == "Smoke Test Location Updated" and edited_location["type"] == "zone"
+      and edited_location["parent_id"] is None, edited_location)
+code, _ = call("PATCH", f"/api/locations/{test_location_id}", token=super_t, body={"parent_id": test_location_id})
+check("location cannot be its own parent", code == 400)
+code, _ = call("PATCH", f"/api/locations/{test_location_id}", token=super_t, body={"code": "TEMPLE"})
+check("location code uniqueness on edit", code == 409)
 code, _ = call("DELETE", f"/api/locations/{test_location_id}", token=super_t)
 check("unused child location can be deleted", code == 200)
 code, root_location = call("POST", "/api/locations", token=super_t, body={
@@ -383,6 +409,7 @@ check("invoice list includes created invoice", code == 200 and any(i["id"] == in
 _, before_invoice_rows = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
 before_invoice_delete = qty(before_invoice_rows, 1, 2)
 code, disposable_invoice = call("POST", "/api/pos/invoices", token=temple_t, body={
+    "customer_name": "Walk-in", "customer_phone": "9999999999",
     "payment_mode": "cash", "items": [{"barcode": "9780892131343", "qty": 1}],
 })
 disposable_invoice_id = disposable_invoice.get("invoice_id")
