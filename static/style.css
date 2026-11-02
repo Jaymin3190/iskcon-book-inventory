@@ -231,6 +231,24 @@ tr:hover td { background: #fbf7ec; }
   .table-scroll > table { width: max-content; min-width: 100%; table-layout: auto; }
 }
 
+/* Per-table filter bar, added automatically above every data table. */
+.table-filter-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 10px; padding: 7px 10px;
+  background: #fbf7ec; border: 1px solid #e6dbc4; border-radius: 8px;
+}
+.table-filter-bar[hidden] { display: none; }
+.table-filter-icon { width: 15px; height: 15px; flex: none; fill: currentColor; color: #8a6d3b; }
+.table-filter-input { flex: 1 1 180px; min-width: 0; padding: 6px 9px; font-size: 13px; background: #fff; }
+.table-filter-count { font-size: 11px; color: #8a6d3b; white-space: nowrap; }
+.table-filter-clear {
+  background: none; border: none; padding: 4px 6px; color: #8a5a1f;
+  font-size: 12px; text-decoration: underline; cursor: pointer;
+}
+.table-filter-clear[hidden] { display: none; }
+/* Author display rules on rows (e.g. mobile card layout) must not defeat the filter. */
+table tr[hidden] { display: none !important; }
+
 .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .badge.requested { background: #fde9b8; color: #7a5a00; }
 .badge.approved { background: #d3e7fb; color: #15589c; }

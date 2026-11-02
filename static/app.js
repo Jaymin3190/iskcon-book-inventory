@@ -65,6 +65,81 @@ function navButton(tab) {
   </button>`;
 }
 
+/* ---- table filters ---- */
+// Tables with editable cells opt out: hiding a row while someone is typing in it would lose their place.
+const TABLE_FILTER_SKIP = new Set(['cartTable', 'scTable']);
+
+function isTableHeaderRow(row) {
+  if (row.parentElement && row.parentElement.tagName === 'THEAD') return true;
+  return row.cells.length > 0 && [...row.cells].every(cell => cell.tagName === 'TH');
+}
+
+function tableFilterRows(table) {
+  return [...table.rows].filter(row =>
+    !isTableHeaderRow(row) &&
+    !(row.cells.length === 1 && row.cells[0].classList.contains('hint'))
+  );
+}
+
+function tableFilterBar(table) {
+  if (table._tableFilterBar && table._tableFilterBar.isConnected) return table._tableFilterBar;
+  const anchor = table.closest('.table-scroll') || table;
+  const bar = document.createElement('div');
+  bar.className = 'table-filter-bar';
+  bar.innerHTML = `
+    <svg class="table-filter-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 5h18l-7 8v5l-4 2v-7z"/></svg>
+    <input type="search" class="table-filter-input" placeholder="Filter this table" aria-label="Filter this table" autocomplete="off">
+    <span class="table-filter-count" aria-live="polite"></span>
+    <button type="button" class="table-filter-clear" hidden>Clear</button>`;
+  anchor.parentNode.insertBefore(bar, anchor);
+  const input = bar.querySelector('.table-filter-input');
+  input.addEventListener('input', () => applyTableFilter(table));
+  input.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    if (input.value) { input.value = ''; applyTableFilter(table); }
+  });
+  bar.querySelector('.table-filter-clear').addEventListener('click', () => {
+    input.value = '';
+    applyTableFilter(table);
+    input.focus();
+  });
+  table._tableFilterBar = bar;
+  return bar;
+}
+
+function applyTableFilter(table) {
+  const bar = table._tableFilterBar;
+  if (!bar || !bar.isConnected) return;
+  const input = bar.querySelector('.table-filter-input');
+  const count = bar.querySelector('.table-filter-count');
+  const clear = bar.querySelector('.table-filter-clear');
+  const query = input.value.trim().toLowerCase();
+  const rows = tableFilterRows(table);
+  let shown = 0;
+  rows.forEach(row => {
+    const match = !query || row.textContent.toLowerCase().includes(query);
+    row.hidden = !match;
+    if (match) shown++;
+  });
+  bar.hidden = rows.length === 0;
+  count.textContent = query ? `${shown} of ${rows.length}` : `${rows.length} ${rows.length === 1 ? 'row' : 'rows'}`;
+  clear.hidden = !query;
+}
+
+function enhanceTableFilters() {
+  const roots = [document.getElementById('content')];
+  if (!document.getElementById('modalBackdrop').hidden) roots.push(document.getElementById('modalBox'));
+  roots.forEach(root => {
+    if (!root) return;
+    root.querySelectorAll('table').forEach(table => {
+      if (TABLE_FILTER_SKIP.has(table.id)) return;
+      tableFilterBar(table);
+      applyTableFilter(table);
+    });
+  });
+}
+
 const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, reports, audit, users, locations };
 
 function renderCurrentTab() {
@@ -76,6 +151,7 @@ function renderCurrentTab() {
       table.parentElement.insertBefore(wrapper, table);
       wrapper.appendChild(table);
     });
+    enhanceTableFilters();
   });
 }
 
@@ -184,6 +260,7 @@ function openModal(html) {
   stopCam();
   document.getElementById('modalBox').innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;
   document.getElementById('modalBackdrop').hidden = false;
+  enhanceTableFilters();
 }
 function closeModal() {
   stopCam();
@@ -420,6 +497,7 @@ async function loadBookRows() {
     <td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${esc(b.isbn || '')}</td><td>${esc(b.language || '')}</td><td>${esc(b.publication || '')}</td><td>&#8377;${b.price}</td>
     ${canEdit ? `<td><button class="action" onclick="bookForm(${b.id})">Edit</button><button class="danger" onclick="bookDelete(${b.id})">Delete</button></td>` : ''}
   </tr>`).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" class="hint">No books found.</td></tr>`;
+  enhanceTableFilters();
 }
 
 function bookForm(bookId = null) {
@@ -1563,6 +1641,7 @@ async function loadAudit() {
     const meta = document.getElementById('auditMeta');
     if (meta) meta.textContent = `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} shown` +
       (rows.length >= 500 ? ' — showing the most recent 500, narrow the filters to see older entries' : '');
+    enhanceTableFilters();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1595,6 +1674,7 @@ async function loadDistributorSales() {
   const query = params.toString();
   state.distributorSales = await api('/api/reports/distributor-sales' + (query ? '?' + query : ''));
   document.getElementById('distributorSalesTable').innerHTML = renderDistributorSalesRows(state.distributorSales);
+  enhanceTableFilters();
 }
 
 function exportDistributorSales() {
