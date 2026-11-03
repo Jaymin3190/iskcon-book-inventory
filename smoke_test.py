@@ -149,6 +149,10 @@ code, inv = call("POST", "/api/pos/invoices", token=temple_t, body={
 })
 check("zone-mapped temple POS invoice (2 x 450)", code == 200 and inv["total"] == 900.0, inv)
 check("invoice number uses the billing user's name", str(inv["invoice_number"]).startswith("INV-templeAdmin-"))
+code, no_phone_invoice = call("POST", "/api/pos/invoices", token=temple_t, body={
+    "customer_name": "Walk-in", "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("invoice requires a phone number", code == 400 and no_phone_invoice.get("detail") == "Phone number is required")
 
 _, ts = call("GET", "/api/stock?location_id=2", token=super_t)
 check("stock decremented on sale", qty(ts, 2, 2) == 8)

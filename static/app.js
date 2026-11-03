@@ -1053,6 +1053,15 @@ function renderCart() {
   document.getElementById('cartTotal').innerHTML = `&#8377;${total.toFixed(2)}`;
 }
 
+function whatsappPhoneNumber(value) {
+  const raw = String(value || '').trim();
+  let digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.length === 10) digits = '91' + digits;
+  else if (digits.length === 11 && digits.startsWith('0')) digits = '91' + digits.slice(1);
+  return digits.length >= 11 && digits.length <= 15 ? digits : null;
+}
+
 let zxingLoadPromise = null;
 
 const SCAN_FORMATS = [
@@ -1439,22 +1448,56 @@ async function checkout() {
   const payRef = document.getElementById('payRef').value.trim();
   if (!custName) return toast('Customer name is required', 'error');
   if (!custPhone) return toast('Phone number is required', 'error');
+  const whatsappNumber = custPhone ? whatsappPhoneNumber(custPhone) : null;
+  if (!whatsappNumber) return toast('Enter a valid WhatsApp number with country code if outside India', 'error');
+  const shareWindow = whatsappNumber ? window.open('about:blank', '_blank') : null;
+  if (whatsappNumber && !shareWindow) return toast('Allow pop-ups to open WhatsApp before saving the invoice', 'error');
+  if (shareWindow) shareWindow.opener = null;
+  const purchasedItems = state.cart.map(i => ({ title: i.title, qty: i.qty }));
+  let res;
   try {
-    const res = await api('/api/pos/invoices', { method: 'POST', body: {
+    res = await api('/api/pos/invoices', { method: 'POST', body: {
       location_id: state.user.role !== 'super_admin' ? state.user.zone_id : Number(document.getElementById('billLoc').value),
       customer_name: custName, customer_phone: custPhone,
       payment_mode: payMode, payment_ref: payRef,
       discount: Number(document.getElementById('discount').value) || 0,
       items: state.cart.map(i => ({ barcode: i.barcode, qty: i.qty })),
     }});
-    state.cart = [];
-    openModal(`<h3>Invoice ${esc(res.invoice_number)}</h3>
-      <p>Total: &#8377;${res.total.toFixed(2)} &nbsp;(subtotal &#8377;${res.subtotal.toFixed(2)}, discount &#8377;${res.discount.toFixed(2)})</p>
-      <p style="font-size:13px;color:#6b5a3a">Payment: ${esc(payMode.toUpperCase())}${payRef ? ' (' + esc(payRef) + ')' : ''}</p>
-      <button class="primary" onclick="printInvoice(${res.invoice_id})">Print / download invoice</button>
-      <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>`);
-    toast('Billed: ' + res.invoice_number, 'success');
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) {
+    if (shareWindow && !shareWindow.closed) shareWindow.close();
+    toast(e.message, 'error');
+    return;
+  }
+  let shareError = '';
+  if (whatsappNumber && shareWindow?.closed) {
+    shareError = 'Invoice saved, but the WhatsApp window was closed';
+  } else if (whatsappNumber && shareWindow) {
+    const itemSummary = purchasedItems.map(i => `${i.title} x ${i.qty}`).join('\n');
+    const message = [
+      `Hare Krishna ${custName},`,
+      'Thank you for your purchase from ISKCON Jamnagar Books & Gifts.',
+      `Invoice: ${res.invoice_number}`,
+      `Items:\n${itemSummary}`,
+      `Total: Rs. ${Number(res.total).toFixed(2)}`,
+      `Payment: ${payMode.toUpperCase()}${payRef ? ` (${payRef})` : ''}`,
+      'Thank you!',
+    ].join('\n\n');
+    try {
+      shareWindow.location.href = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
+      shareWindow.focus();
+    } catch (e) {
+      shareWindow.close();
+      shareError = `Invoice saved, but WhatsApp could not be opened: ${e.message}`;
+    }
+  }
+  state.cart = [];
+  openModal(`<h3>Invoice ${esc(res.invoice_number)}</h3>
+    <p>Total: &#8377;${res.total.toFixed(2)} &nbsp;(subtotal &#8377;${res.subtotal.toFixed(2)}, discount &#8377;${res.discount.toFixed(2)})</p>
+    <p style="font-size:13px;color:#6b5a3a">Payment: ${esc(payMode.toUpperCase())}${payRef ? ' (' + esc(payRef) + ')' : ''}</p>
+    ${shareError ? `<p class="hint">${esc(shareError)}</p>` : whatsappNumber ? '<p class="hint">WhatsApp opened in a new tab with the invoice message. Tap Send there to notify the customer.</p>' : ''}
+    <button class="primary" onclick="printInvoice(${res.invoice_id})">Print / download invoice</button>
+    <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>`);
+  toast(shareError || 'Billed: ' + res.invoice_number, shareError ? 'error' : 'success');
 }
 
 async function printInvoice(invoiceId) {
