@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
@@ -10,6 +9,7 @@ from ..database import get_db
 from ..services.audit import log_audit
 from ..services.ledger import check_available, ensure_stock, move_stock
 from ..services.scope import can_view, location_ids
+from ..services.timezone import now_ist
 
 router = APIRouter(prefix="/api/stock", tags=["stock"])
 
@@ -319,7 +319,7 @@ def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_
     if shortages:
         raise HTTPException(400, "Insufficient warehouse stock to issue: " + ", ".join(shortages))
 
-    num = f"TRF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
+    num = f"TRF-{now_ist().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
     cur = db.execute(
         """INSERT INTO transfers (request_number, from_location_id, to_location_id, status, requested_by, note)
            VALUES (?,?,?, 'requested', ?, ?)""",
@@ -464,7 +464,7 @@ def create_return(data: ReturnIn, db=Depends(get_db), user=Depends(require_roles
             shortages.append(f"{book['title']} (need {it.qty})")
     if shortages:
         raise HTTPException(400, "Insufficient stock to return: " + ", ".join(shortages))
-    num = f"RET-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
+    num = f"RET-{now_ist().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
     cur = db.execute(
         "INSERT INTO returns (return_number, location_id, reason, created_by) VALUES (?,?,?,?)",
         (num, data.location_id, data.reason, user["id"]),

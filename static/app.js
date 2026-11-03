@@ -637,7 +637,7 @@ async function showLedger(locationId = null, bookId = null) {
   openModal(`<h3>Stock ledger (movements)${book ? ' — ' + esc(book.title) : ''}</h3>
     <table>
       <tr><th>Time</th><th>Location</th><th>Title</th><th>Type</th><th>Qty</th><th>Ref</th><th>Note</th><th>User</th></tr>
-      ${rows.map(m => `<tr><td>${esc(m.created_at)}</td><td>${esc(m.location_code)}</td><td>${esc(m.title)}</td><td>${esc(m.change_type)}</td><td>${m.qty}</td><td>${esc(m.ref_type || '')}${m.ref_id ? '#' + m.ref_id : ''}</td><td>${esc(m.note || '')}</td><td>${esc(m.user_name || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">No movements yet.</td></tr>'}
+      ${rows.map(m => `<tr><td>${esc(formatAuditTime(m.created_at))}</td><td>${esc(m.location_code)}</td><td>${esc(m.title)}</td><td>${esc(m.change_type)}</td><td>${m.qty}</td><td>${esc(m.ref_type || '')}${m.ref_id ? '#' + m.ref_id : ''}</td><td>${esc(m.note || '')}</td><td>${esc(m.user_name || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="hint">No movements yet.</td></tr>'}
     </table>`);
 }
 
@@ -810,7 +810,7 @@ async function renderReturns() {
     </div>
     <div class="card"><h2>Damaged write-offs</h2>
       <table><tr><th>Time</th><th>Location</th><th>Title</th><th>Qty</th><th>Reason</th><th>Actions</th></tr>
-        ${damaged.map(d => `<tr><td>${esc(d.created_at)}</td><td>${esc(d.location_code)}</td><td>${esc(d.title)}</td><td>${d.qty}</td><td>${esc(d.reason_code)}</td><td>${canProc ? `<button class="danger" onclick="dDelete(${d.id})">Undo</button>` : '&mdash;'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No damaged write-offs.</td></tr>'}
+        ${damaged.map(d => `<tr><td>${esc(formatAuditTime(d.created_at))}</td><td>${esc(d.location_code)}</td><td>${esc(d.title)}</td><td>${d.qty}</td><td>${esc(d.reason_code)}</td><td>${canProc ? `<button class="danger" onclick="dDelete(${d.id})">Undo</button>` : '&mdash;'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No damaged write-offs.</td></tr>'}
       </table>
     </div>`;
 }
@@ -1020,9 +1020,10 @@ async function doScan(code, opts = {}) {
   try {
     const b = await api('/api/books/lookup/' + encodeURIComponent(code.trim()));
     addToCart(b);
-    toast(b.title + ' added', 'success');
+    const message = b.title + ' added. Ready for the next scan.';
+    toast(message, 'success');
     if (c) c.focus();
-    return b.title + ' added';
+    return message;
   } catch (e) {
     if (!opts.rethrow) toast(e.message, 'error');
     if (c) c.focus();
@@ -1818,7 +1819,7 @@ function formatAuditTime(value) {
   const timestamp = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw) ? raw : raw.replace(' ', 'T') + 'Z';
   const d = new Date(timestamp);
   if (isNaN(d)) return raw;
-  return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' IST';
 }
 
 let auditTimer = null;
@@ -1900,7 +1901,7 @@ function renderDistributorSalesRows(rows) {
   if (!rows.length) return '<p class="hint">No distributor sales found for this period.</p>';
   return `<table><tr><th>Date</th><th>Bill</th><th>Distributor</th><th>Location</th><th>Book</th><th>Qty</th><th>Payment mode</th><th>Amount</th></tr>
       ${rows.map(s => `<tr>
-        <td>${esc(s.sold_at)}</td><td>${esc(s.invoice_number)}</td>
+        <td>${esc(formatAuditTime(s.sold_at))}</td><td>${esc(s.invoice_number)}</td>
         <td>${esc(s.distributor_name)} (${esc(s.distributor_username)})</td>
         <td>${esc(s.location_name)}</td><td>${esc(s.book_title)}</td><td>${s.qty}</td>
         <td>${esc(s.payment_mode.toUpperCase())}</td><td>&#8377;${Number(s.amount).toFixed(2)}</td>
@@ -1927,7 +1928,7 @@ function exportDistributorSales() {
       ['distributor_username', 'Username'], ['location_name', 'Location'], ['book_title', 'Book'],
       ['barcode', 'Barcode'], ['qty', 'Quantity'], ['payment_mode', 'Payment mode'], ['amount', 'Amount'],
   ];
-  const csv = [columns.map(([, label]) => label), ...state.distributorSales.map(row => columns.map(([key]) => row[key] ?? ''))]
+  const csv = [columns.map(([, label]) => label), ...state.distributorSales.map(row => columns.map(([key]) => key === 'sold_at' ? formatAuditTime(row[key]) : row[key] ?? ''))]
       .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))
       .join('\r\n');
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));

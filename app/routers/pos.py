@@ -1,5 +1,4 @@
 import re
-from datetime import datetime, timedelta, timezone
 from html import escape
 from typing import Optional
 
@@ -12,11 +11,11 @@ from ..database import get_db
 from ..services.audit import log_audit
 from ..services.ledger import check_available, move_stock
 from ..services.scope import invoice_location_ids, location_ids
+from ..services.timezone import format_ist_date
 
 router = APIRouter(prefix="/api/pos", tags=["pos"])
 
 PAYMENT_MODES = ("cash", "upi")
-IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def next_invoice_number(db, user) -> str:
@@ -158,10 +157,7 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
 
 
 def invoice_date_ist(value):
-    created_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-    return created_at.astimezone(IST).strftime("%d/%m/%Y")
+    return format_ist_date(value)
 
 
 def invoice_html(inv, items):

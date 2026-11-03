@@ -19,10 +19,10 @@ def sales_report(frm: str = None, to: str = None, location_id: int = None, db=De
              WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
     params = list(ids)
     if frm:
-        sql += " AND i.created_at >= ?"
+        sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
         params.append(frm)
     if to:
-        sql += " AND i.created_at <= ?"
+        sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') <= ?"
         params.append(to + " 23:59:59")
     if location_id:
         if location_id not in ids:
@@ -44,10 +44,10 @@ def sales_by_book(frm: str = None, to: str = None, db=Depends(get_db), user=Depe
              WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
     params = list(ids)
     if frm:
-        sql += " AND i.created_at >= ?"
+        sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
         params.append(frm)
     if to:
-        sql += " AND i.created_at <= ?"
+        sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') <= ?"
         params.append(to + " 23:59:59")
     sql += " GROUP BY b.id ORDER BY revenue DESC"
     return [dict(r) for r in db.execute(sql, params).fetchall()]
@@ -71,10 +71,10 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
         sql += " AND u.zone_id = ?"
         params.append(user["zone_id"])
     if frm:
-        sql += " AND i.created_at >= ?"
+        sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
         params.append(frm)
     if to:
-        sql += " AND i.created_at <= ?"
+        sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') <= ?"
         params.append(to + " 23:59:59")
     sql += " ORDER BY i.created_at DESC, i.id DESC, ii.id"
     return [dict(r) for r in db.execute(sql, params).fetchall()]
@@ -310,10 +310,10 @@ def _audit_where(user, q=None, action=None, entity=None, username=None, frm=None
         where.append("a.username = ?")
         params.append(username)
     if frm:
-        where.append("date(a.created_at) >= date(?)")
+        where.append("date(a.created_at, '+5 hours', '+30 minutes') >= date(?)")
         params.append(frm)
     if to:
-        where.append("date(a.created_at) <= date(?)")
+        where.append("date(a.created_at, '+5 hours', '+30 minutes') <= date(?)")
         params.append(to)
     clause = (" WHERE " + " AND ".join(where)) if where else ""
     return clause, params

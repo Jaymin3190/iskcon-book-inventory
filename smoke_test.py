@@ -472,6 +472,7 @@ with urllib.request.urlopen(req) as resp:
     receipt_body = resp.read().decode()
 check("printable cash receipt HTML", "cash payment-in receipt" in receipt_body.lower())
 check("printed receipt shows the zone admin", "Zone Leader - Temple Zone" in receipt_body)
+check("printed cash receipt labels its date as IST", " IST" in receipt_body)
 
 # --- catalogue CRUD ---
 code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)

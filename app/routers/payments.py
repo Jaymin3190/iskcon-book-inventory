@@ -11,6 +11,7 @@ from ..auth import require_roles
 from ..database import get_db
 from ..services.audit import log_audit
 from ..services.scope import payment_zone_ids, zone_location_ids
+from ..services.timezone import format_ist_datetime
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
@@ -286,7 +287,7 @@ def receipt_html(payment) -> str:
     rows = "".join(
         f"<tr><td>{escape(str(it['invoice_number']))}</td>"
         f"<td>{escape(str(it.get('cashier_name') or '-'))}</td>"
-        f"<td>{escape(str(it['created_at']))}</td>"
+        f"<td>{escape(format_ist_datetime(it['created_at']))}</td>"
         f"<td class='r'>{float(it['amount']):.2f}</td></tr>"
         for it in payment["items"]
     )
@@ -313,7 +314,7 @@ def receipt_html(payment) -> str:
     <div class="head">
       <h1>ISKCON Book Distribution</h1>
       <div class="sub">Cash payment-in receipt &mdash; {escape(str(payment['receipt_number']))}</div>
-      <div class="sub">Date: {escape(str(payment['created_at']))}</div>
+      <div class="sub">Date: {escape(format_ist_datetime(payment['created_at']))}</div>
     </div>
     <p class="sub">Received from: <strong>{escape(str(payment['zone_admin_name']))}</strong>
       ({escape(str(payment['zone_admin_username']))})</p>
