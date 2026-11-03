@@ -155,6 +155,11 @@ CREATE TABLE IF NOT EXISTS invoice_items (
     line_total NUMERIC NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS invoice_sequences (
+    user_id INTEGER PRIMARY KEY,
+    next_number INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),

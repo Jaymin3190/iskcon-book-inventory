@@ -94,7 +94,7 @@ code, admin_invoice = call("POST", "/api/pos/invoices", token=super_t, body={
     "customer_name": "Walk-in", "customer_phone": "9999999999",
     "payment_mode": "cash", "items": [{"barcode": "9780892139523", "qty": 1}],
 })
-check("super admin can bill without an assigned location", code == 200 and admin_invoice["invoice_number"].startswith("INV-TEMPLE-"), admin_invoice)
+check("super admin can bill without an assigned location", code == 200 and admin_invoice["invoice_number"].startswith("INV-superadmin-"), admin_invoice)
 
 # --- transfer: zone leader self-service from temple ---
 code, tr = call("POST", "/api/stock/transfers", token=zone_t, body={
@@ -148,7 +148,7 @@ code, inv = call("POST", "/api/pos/invoices", token=temple_t, body={
     "items": [{"barcode": "9780892132517", "qty": 2}],
 })
 check("zone-mapped temple POS invoice (2 x 450)", code == 200 and inv["total"] == 900.0, inv)
-check("invoice number uses assigned zone", str(inv["invoice_number"]).startswith("INV-TZ-"))
+check("invoice number uses the billing user's name", str(inv["invoice_number"]).startswith("INV-templeAdmin-"))
 
 _, ts = call("GET", "/api/stock?location_id=2", token=super_t)
 check("stock decremented on sale", qty(ts, 2, 2) == 8)
@@ -315,6 +315,69 @@ check("distributor detail includes invoices and books", code == 200
       and dist_detail["books"][0]["qty"] == 4 and dist_detail["summary"]["revenue"] == 400.0, dist_detail)
 code, _ = call("GET", f"/api/reports/distributors/{dist_me['user']['id']}", token=other_zone_t)
 check("other zone admin cannot view distributor detail", code == 403)
+
+# --- invoice visibility by role ---
+code, zone_inv = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Zone Walk-in", "customer_phone": "9999999999",
+    "payment_mode": "cash", "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("zone admin can bill at own zone", code == 200
+      and zone_inv["invoice_number"] == "INV-leader-temple-zone-0001", zone_inv)
+
+code, zone_inv2 = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Zone Walk-in 2", "customer_phone": "9999999999",
+    "payment_mode": "upi", "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("invoice numbers increment per user", code == 200
+      and zone_inv2["invoice_number"] == "INV-leader-temple-zone-0002", zone_inv2)
+code, _ = call("DELETE", f"/api/pos/invoices/{zone_inv2['invoice_id']}", token=super_t)
+check("super admin can delete a zone admin bill", code == 200)
+code, zone_inv3 = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Zone Walk-in 3", "customer_phone": "9999999999",
+    "payment_mode": "cash", "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("deleted invoice numbers are not reused", code == 200
+      and zone_inv3["invoice_number"] == "INV-leader-temple-zone-0003", zone_inv3)
+
+_, super_invoices = call("GET", "/api/pos/invoices", token=super_t)
+super_invoice_ids = {row["id"] for row in super_invoices}
+check("super admin sees invoices billed by zone admins",
+      admin_invoice["invoice_id"] in super_invoice_ids and zone_inv["invoice_id"] in super_invoice_ids)
+zone_bill = next((row for row in super_invoices if row["id"] == zone_inv["invoice_id"]), {})
+check("super admin sees who billed each invoice",
+      zone_bill.get("cashier_name") == "Zone Leader - Temple Zone", zone_bill)
+
+code, zone_inv_list = call("GET", "/api/pos/invoices", token=zone_t)
+zone_inv_ids = {row["id"] for row in zone_inv_list}
+check("zone admin sees only own-zone invoices", code == 200
+      and zone_inv["invoice_id"] in zone_inv_ids
+      and admin_invoice["invoice_id"] not in zone_inv_ids
+      and all(row["location_id"] == 2 for row in zone_inv_list), zone_inv_list)
+code, _ = call("GET", f"/api/pos/invoices/{admin_invoice['invoice_id']}", token=zone_t)
+check("zone admin cannot open a warehouse invoice", code == 403)
+code, _ = call("GET", f"/api/pos/invoices/{admin_invoice['invoice_id']}/print", token=zone_t)
+check("zone admin cannot print a warehouse invoice", code == 403)
+code, _ = call("DELETE", f"/api/pos/invoices/{admin_invoice['invoice_id']}", token=zone_t)
+check("zone admin cannot delete a warehouse invoice", code == 403)
+code, super_zone_bill = call("GET", f"/api/pos/invoices/{zone_inv['invoice_id']}", token=super_t)
+check("super admin can open a zone admin's bill", code == 200
+      and super_zone_bill["cashier_name"] == "Zone Leader - Temple Zone", super_zone_bill)
+
+code, zone_sales = call("GET", "/api/reports/sales", token=zone_t)
+check("zone admin sales report covers only own zone", code == 200
+      and zone_sales and all(row["location_id"] == 2 for row in zone_sales), zone_sales)
+code, all_sales = call("GET", "/api/reports/sales", token=super_t)
+check("super admin sales report covers every location", code == 200
+      and {row["location_id"] for row in all_sales} >= {1, 2}, all_sales)
+
+_, zone_bills = call("GET", "/api/reports/zones/2/invoices", token=zone_t)
+check("zone invoice list includes zone admin bills", code == 200
+      and any(row["id"] == zone_inv["invoice_id"] for row in zone_bills), zone_bills)
+_, super_zone_bills = call("GET", "/api/reports/zones/2/invoices", token=super_t)
+check("super admin can list any zone's invoices",
+      any(row["id"] == zone_inv["invoice_id"] for row in super_zone_bills), super_zone_bills)
+code, _ = call("GET", "/api/reports/zones/3/invoices", token=zone_t)
+check("zone admin cannot list another zone's invoices", code == 403)
 
 # --- catalogue CRUD ---
 code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)

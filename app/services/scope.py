@@ -21,6 +21,33 @@ def can_view(db, user, location_id) -> bool:
     return location_id in location_ids(db, user)
 
 
+def zone_location_ids(db, zone_id) -> set:
+    """A location and every location beneath it, never its parent."""
+    if not zone_id:
+        return {None}
+    rows = db.execute(
+        """WITH RECURSIVE tree(id) AS (
+               SELECT ?
+               UNION
+               SELECT l.id FROM locations l JOIN tree t ON l.parent_id = t.id
+           )
+           SELECT id FROM tree""",
+        (zone_id,),
+    ).fetchall()
+    return {r["id"] for r in rows}
+
+
+def invoice_location_ids(db, user) -> set:
+    """Locations whose invoices a user may see.
+
+    Invoice visibility is narrower than general location visibility: a zone user
+    must not see bills at their parent warehouse, but a super admin sees them all.
+    """
+    if user["role"] == "super_admin":
+        return location_ids(db, user)
+    return zone_location_ids(db, user["zone_id"])
+
+
 def zone_of(db, location_id):
     row = db.execute("SELECT parent_id FROM locations WHERE id = ?", (location_id,)).fetchone()
     return row["parent_id"] if row else None

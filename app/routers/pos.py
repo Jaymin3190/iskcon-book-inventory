@@ -1,6 +1,5 @@
-from datetime import datetime
+import re
 from typing import Optional
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -10,11 +9,23 @@ from ..auth import require_roles
 from ..database import get_db
 from ..services.audit import log_audit
 from ..services.ledger import check_available, move_stock
-from ..services.scope import location_ids
+from ..services.scope import invoice_location_ids, location_ids
 
 router = APIRouter(prefix="/api/pos", tags=["pos"])
 
 PAYMENT_MODES = ("cash", "upi")
+
+
+def next_invoice_number(db, user) -> str:
+    """Simple per-user series such as INV-superadmin-0001."""
+    seq = db.execute(
+        """INSERT INTO invoice_sequences (user_id, next_number) VALUES (?, 1)
+           ON CONFLICT(user_id) DO UPDATE SET next_number = next_number + 1
+           RETURNING next_number""",
+        (user["id"],),
+    ).fetchone()["next_number"]
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(user["username"] or "")).strip("-._")
+    return f"INV-{name or ('user' + str(user['id']))}-{seq:04d}"
 
 
 class InvoiceItemIn(BaseModel):
@@ -34,7 +45,7 @@ class InvoiceIn(BaseModel):
 
 @router.get("/invoices")
 def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
-    ids = location_ids(db, user)
+    ids = invoice_location_ids(db, user)
     sql = """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
              FROM invoices i
              JOIN locations l ON l.id = i.location_id
@@ -96,7 +107,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     discount = min(data.discount, subtotal)
     total = round(subtotal - discount, 2)
 
-    num = f"INV-{loc['code']}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
+    num = next_invoice_number(db, user)
     cur = db.execute(
         """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone,
                                  payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)
@@ -128,7 +139,7 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
     ).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    if inv["location_id"] not in location_ids(db, user):
+    if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
         raise HTTPException(403, "Distributors can only access their own bills")
@@ -192,7 +203,7 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
     ).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    if inv["location_id"] not in location_ids(db, user):
+    if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
         raise HTTPException(403, "Distributors can only access their own bills")
@@ -212,7 +223,7 @@ def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_rol
     inv = db.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    if inv["location_id"] not in location_ids(db, user):
+    if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
         raise HTTPException(403, "Distributors can only access their own bills")

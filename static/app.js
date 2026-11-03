@@ -381,18 +381,31 @@ function miniStat(label, value) {
 
 async function zoneDetails(zoneId) {
   const z = (state.zones || []).find(x => x.id === zoneId) || {};
-  let distributors;
+  let distributors, invoices;
   try {
-    distributors = await api('/api/reports/distributors?zone_id=' + zoneId);
+    [distributors, invoices] = await Promise.all([
+      api('/api/reports/distributors?zone_id=' + zoneId),
+      api('/api/reports/zones/' + zoneId + '/invoices'),
+    ]);
   } catch (e) { toast(e.message, 'error'); return; }
   state.zoneDistributors = distributors;
-  openModal(`<h3>${esc(z.name || 'Zone')} &mdash; distributors</h3>
+  const invoiceRows = invoices.map(i => `<tr>
+      <td>${esc(i.invoice_number)}</td>
+      <td>${esc(formatAuditTime(i.created_at))}</td>
+      <td>${esc(i.cashier_name || '—')}<span class="cart-book-barcode">${esc(i.cashier_username || '')}</span></td>
+      <td>${esc(i.customer_name || '—')}<span class="cart-book-barcode">${esc(i.customer_phone || '')}</span></td>
+      <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
+      <td>${i.books_qty}</td>
+      <td>&#8377;${Number(i.total).toFixed(2)}</td>
+      <td><button class="action" onclick="printInvoice(${i.id})">Print</button></td>
+    </tr>`).join('') || '<tr><td colspan="8" class="hint">No invoices in this zone yet.</td></tr>';
+  openModal(`<h3>${esc(z.name || 'Zone')} &mdash; details</h3>
     <p class="hint">${esc(z.code || '')} &middot; ${z.stock_units ?? 0} stock units &middot; ${z.distributor_count ?? distributors.length} active distributor(s)</p>
     <div class="mini-stats">
       ${miniStat('Zone revenue', '&#8377;' + Number(z.revenue || 0).toFixed(2))}
       ${miniStat('Cash', '&#8377;' + Number(z.cash_total || 0).toFixed(2))}
       ${miniStat('UPI', '&#8377;' + Number(z.upi_total || 0).toFixed(2))}
-      ${miniStat('Bills', z.invoice_count ?? 0)}
+      ${miniStat('Bills', z.invoice_count ?? invoices.length)}
       ${miniStat('Books sold', z.books_sold ?? 0)}
       ${miniStat('Stock value', '&#8377;' + Number(z.stock_value || 0).toFixed(0))}
     </div>
@@ -409,6 +422,11 @@ async function zoneDetails(zoneId) {
         <td>${d.last_sale ? esc(formatAuditTime(d.last_sale)) : '&mdash;'}</td>
         <td><button class="action" onclick="event.stopPropagation(); distributorDetails(${d.id}, ${zoneId})">Details</button></td>
       </tr>`).join('') || '<tr><td colspan="8" class="hint">No distributors assigned to this zone.</td></tr>'}
+    </table>
+    <h4>Zone invoices (${invoices.length})</h4>
+    <table>
+      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Customer</th><th>Payment</th><th>Qty</th><th>Total</th><th></th></tr>
+      ${invoiceRows}
     </table>
     <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
@@ -1456,13 +1474,14 @@ async function invoiceList() {
   const rows = await api('/api/pos/invoices');
   const canDeleteAny = hasAnyRole('super_admin', 'zone_admin');
   openModal(`<h3>Invoice history</h3>
+    <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only.</p>
     <table>
-      <tr><th>Invoice</th><th>Date</th><th>Location</th><th>Customer</th><th>Payment</th><th>Total</th><th>Actions</th></tr>
+      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Total</th><th>Actions</th></tr>
       ${rows.map(i => `<tr>
-        <td>${esc(i.invoice_number)}</td><td>${esc(i.created_at)}</td><td>${esc(i.location_name)}</td>
+        <td>${esc(i.invoice_number)}</td><td>${esc(i.created_at)}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td>&#8377;${Number(i.total).toFixed(2)}</td>
         <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="8" class="hint">No invoices yet.</td></tr>'}
     </table>`);
 }
 
