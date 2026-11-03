@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], payNumbers: [], invoicePdf: null };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -606,30 +606,57 @@ async function stockAdjustModal(bookId = null, locationId = null) {
   openModal(`<h3>Receive / adjust warehouse stock</h3>
     <div class="form-grid">
       <div class="form-row"><label>Warehouse</label><select id="saLoc">${allowedLocations.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
-      <div class="form-row"><label>Book</label><select id="saBook"><option value="">Select book</option>${books.map(b => `<option value="${b.id}">${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}</select></div>
       <div class="form-row"><label>Direction</label><select id="saDir"><option value="in">Stock in (+)</option><option value="out">Stock out (-)</option></select></div>
-      <div class="form-row"><label>Quantity</label><input id="saQty" type="number" min="1" value="1"></div>
     </div>
+    <h4>Books and quantities</h4>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Book</th><th>Quantity</th><th></th></tr></thead>
+      <tbody id="saItems"></tbody>
+    </table></div>
+    <button class="action" onclick="stockAdjustAddRow()">+ Add another book</button>
     <div class="form-row"><label>Note / reason</label><input id="saNote" placeholder="e.g. opening stock, purchase, correction"></div>
     <button class="primary" onclick="stockAdjustSubmit()">Save</button>`);
   if (locationId) document.getElementById('saLoc').value = String(locationId);
-  if (bookId) document.getElementById('saBook').value = String(bookId);
+  stockAdjustAddRow(bookId);
+}
+
+function stockAdjustAddRow(bookId = null) {
+  const rows = document.getElementById('saItems');
+  if (!rows) return;
+  const row = document.createElement('tr');
+  row.className = 'sa-item';
+  row.innerHTML = `<td><select class="sa-book" aria-label="Book">
+    <option value="">Select book</option>
+    ${state.books.map(b => `<option value="${b.id}">${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}
+  </select></td>
+  <td><input class="sa-qty" type="number" min="1" step="1" value="1" aria-label="Quantity"></td>
+  <td><button class="danger" type="button" onclick="this.closest('tr').remove()" aria-label="Remove book">&times;</button></td>`;
+  rows.appendChild(row);
+  if (bookId) row.querySelector('.sa-book').value = String(bookId);
 }
 
 async function stockAdjustSubmit() {
-  const bookId = Number(document.getElementById('saBook').value);
-  if (!bookId) { toast('Select a book', 'error'); return; }
-  const qty = Number(document.getElementById('saQty').value) || 0;
-  if (qty <= 0) { toast('Quantity must be positive', 'error'); return; }
+  const rows = [...document.querySelectorAll('#saItems .sa-item')];
+  if (!rows.length) { toast('Add at least one book', 'error'); return; }
   const direction = document.getElementById('saDir').value;
+  const bookIds = new Set();
+  const items = [];
+  for (const row of rows) {
+    const bookId = Number(row.querySelector('.sa-book').value);
+    const qty = Number(row.querySelector('.sa-qty').value);
+    if (!bookId) { toast('Select a book for every row', 'error'); return; }
+    if (!Number.isInteger(qty) || qty <= 0) { toast('Each quantity must be a positive whole number', 'error'); return; }
+    if (bookIds.has(bookId)) { toast('Each book can only be listed once', 'error'); return; }
+    bookIds.add(bookId);
+    items.push({ book_id: bookId, qty: direction === 'in' ? qty : -qty });
+  }
   try {
-    const res = await api('/api/stock/adjust', { method: 'POST', body: {
-      book_id: bookId,
+    const res = await api('/api/stock/adjust/batch', { method: 'POST', body: {
       location_id: Number(document.getElementById('saLoc').value),
-      qty: direction === 'in' ? qty : -qty,
+      items,
       note: document.getElementById('saNote').value.trim() || null,
     }});
-    closeModal(); toast('Stock updated. New quantity: ' + res.qty, 'success'); refreshCurrent();
+    closeModal(); toast(`Stock updated for ${res.items.length} book${res.items.length === 1 ? '' : 's'}`, 'success'); refreshCurrent();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1719,8 +1746,16 @@ async function paymentForm() {
   catch (e) { toast(e.message, 'error'); return; }
   if (!users.length) { toast('No active zone admins found', 'error'); return; }
   state.payNumbers = [];
+  state.payZoneAdmins = users;
+  const zones = [...new Map(users.map(u => [u.zone_id, u.zone_name])).entries()];
   openModal(`<h3>New payment in</h3>
     <p class="hint">Select the zone leader handing over cash, then add the receipt numbers they are depositing. Receipts billed by their distributors count too, and the total is calculated for you.</p>
+    <div class="form-row"><label>Filter by zone</label>
+      <select id="payZoneFilter" onchange="paymentZoneChanged()">
+        <option value="">All zones</option>
+        ${zones.map(([id, name]) => `<option value="${id}">${esc(name)}</option>`).join('')}
+      </select>
+    </div>
     <div class="form-row"><label>Zone admin</label>
       <select id="payUser" onchange="paymentPendingLoad()">
         ${users.map(u => `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
@@ -1742,6 +1777,18 @@ async function paymentForm() {
     <div class="toolbar"><button class="primary" onclick="paymentSubmit()">Confirm payment &amp; generate receipt</button><button class="action" onclick="closeModal()">Cancel</button></div>`);
   paymentRenderCart([], 0, 0);
   await paymentPendingLoad();
+}
+
+function paymentZoneChanged() {
+  const zoneFilter = document.getElementById('payZoneFilter');
+  const userSelect = document.getElementById('payUser');
+  if (!zoneFilter || !userSelect) return;
+  const zoneId = zoneFilter.value;
+  const users = state.payZoneAdmins.filter(u => !zoneId || String(u.zone_id) === zoneId);
+  userSelect.innerHTML = users.map(u =>
+    `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`
+  ).join('');
+  paymentPendingLoad();
 }
 
 async function paymentPendingLoad() {

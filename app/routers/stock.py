@@ -65,6 +65,72 @@ class StockAdjustIn(BaseModel):
     note: Optional[str] = None
 
 
+class StockAdjustItemIn(BaseModel):
+    book_id: int
+    qty: int
+
+
+class StockAdjustBatchIn(BaseModel):
+    location_id: int
+    items: list[StockAdjustItemIn]
+    note: Optional[str] = None
+
+
+@router.post("/adjust/batch")
+def adjust_stock_batch(data: StockAdjustBatchIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "temple"))):
+    if not data.items:
+        raise HTTPException(400, "Add at least one book")
+    if any(item.qty == 0 for item in data.items):
+        raise HTTPException(400, "Quantity must not be zero")
+    book_ids = [item.book_id for item in data.items]
+    if len(set(book_ids)) != len(book_ids):
+        raise HTTPException(400, "A book can only be listed once")
+    if data.location_id not in location_ids(db, user):
+        raise HTTPException(403, "Forbidden")
+    location = db.execute(
+        "SELECT type, parent_id FROM locations WHERE id = ?",
+        (data.location_id,),
+    ).fetchone()
+    if not location or location["type"] != "warehouse" or location["parent_id"] is not None:
+        raise HTTPException(403, "Manual stock adjustments are only allowed at the warehouse; use a transfer to assign stock to a zone")
+    placeholders = ",".join("?" * len(book_ids))
+    books = db.execute(
+        f"SELECT id, title FROM books WHERE id IN ({placeholders})",
+        book_ids,
+    ).fetchall()
+    books_by_id = {book["id"]: book for book in books}
+    missing_ids = [book_id for book_id in book_ids if book_id not in books_by_id]
+    if missing_ids:
+        raise HTTPException(404, "Book not found: " + ", ".join(map(str, missing_ids)))
+
+    updated = []
+    try:
+        for item in data.items:
+            move_stock(
+                db, item.book_id, data.location_id, item.qty,
+                "STOCK_IN" if item.qty > 0 else "STOCK_OUT",
+                "manual", None, user["id"], data.note, commit=False,
+            )
+            updated.append({
+                "book_id": item.book_id,
+                "qty": ensure_stock(db, item.book_id, data.location_id),
+            })
+        details = "; ".join(
+            f"{books_by_id[item.book_id]['title']} {item.qty:+d} (now {new['qty']})"
+            for item, new in zip(data.items, updated)
+        )
+        log_audit(
+            db, user["id"], "STOCK_ADJUST", "stock", None,
+            f"{details} at location {data.location_id}" +
+            (f" - {data.note.strip()}" if data.note and data.note.strip() else ""),
+            user["username"],
+        )
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    return {"ok": True, "location_id": data.location_id, "items": updated}
+
+
 @router.post("/adjust")
 def adjust_stock(data: StockAdjustIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "temple"))):
     if data.qty == 0:
