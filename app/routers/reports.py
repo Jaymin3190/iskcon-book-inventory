@@ -16,7 +16,7 @@ def sales_report(frm: str = None, to: str = None, location_id: int = None, db=De
                     COALESCE(SUM(i.subtotal),0) AS subtotal, COALESCE(SUM(i.discount),0) AS discount
              FROM invoices i
              JOIN locations l ON l.id = i.location_id
-             WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
+             WHERE i.location_id IN ({}) AND i.status = 'paid'""".format(",".join("?" * len(ids)))
     params = list(ids)
     if frm:
         sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
@@ -41,7 +41,7 @@ def sales_by_book(frm: str = None, to: str = None, db=Depends(get_db), user=Depe
              FROM invoice_items ii
              JOIN invoices i ON i.id = ii.invoice_id
              JOIN books b ON b.id = ii.book_id
-             WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
+             WHERE i.location_id IN ({}) AND i.status = 'paid'""".format(",".join("?" * len(ids)))
     params = list(ids)
     if frm:
         sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
@@ -65,7 +65,7 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
              JOIN locations l ON l.id = i.location_id
              JOIN invoice_items ii ON ii.invoice_id = i.id
              JOIN books b ON b.id = ii.book_id
-             WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
+             WHERE i.location_id IN ({}) AND i.status = 'paid'""".format(",".join("?" * len(ids)))
     params = list(ids)
     if has_role(user, "zone_admin"):
         sql += " AND u.zone_id = ?"
@@ -109,6 +109,7 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                           COALESCE(SUM(CASE WHEN i.payment_mode = 'cash' THEN i.total ELSE 0 END),0) AS cash_total,
                           COALESCE(SUM(CASE WHEN i.payment_mode = 'upi' THEN i.total ELSE 0 END),0) AS upi_total
                      FROM invoices i JOIN tree t ON t.id = i.location_id
+                    WHERE i.status = 'paid'
                     GROUP BY t.root_id
                ),
                sold_agg AS (
@@ -116,6 +117,7 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                      FROM invoices i
                      JOIN tree t ON t.id = i.location_id
                      JOIN invoice_items ii ON ii.invoice_id = i.id
+                    WHERE i.status = 'paid'
                     GROUP BY t.root_id
                )
              SELECT l.id, l.code, l.name,
@@ -177,16 +179,16 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
 
     sql = f"""SELECT u.id, u.name, u.username, u.is_active, u.zone_id, u.created_at,
                      l.name AS zone_name,
-                     (SELECT COUNT(*) FROM invoices i WHERE i.cashier_id = u.id) AS invoice_count,
-                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i WHERE i.cashier_id = u.id) AS revenue,
+                     (SELECT COUNT(*) FROM invoices i WHERE i.cashier_id = u.id AND i.status = 'paid') AS invoice_count,
+                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i WHERE i.cashier_id = u.id AND i.status = 'paid') AS revenue,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE i.cashier_id = u.id AND i.payment_mode = 'cash') AS cash_total,
+                       WHERE i.cashier_id = u.id AND i.payment_mode = 'cash' AND i.status = 'paid') AS cash_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE i.cashier_id = u.id AND i.payment_mode = 'upi') AS upi_total,
+                       WHERE i.cashier_id = u.id AND i.payment_mode = 'upi' AND i.status = 'paid') AS upi_total,
                      (SELECT COALESCE(SUM(ii.qty),0)
                         FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-                       WHERE i.cashier_id = u.id) AS books_sold,
-                     (SELECT MAX(i.created_at) FROM invoices i WHERE i.cashier_id = u.id) AS last_sale
+                       WHERE i.cashier_id = u.id AND i.status = 'paid') AS books_sold,
+                     (SELECT MAX(i.created_at) FROM invoices i WHERE i.cashier_id = u.id AND i.status = 'paid') AS last_sale
               FROM users u
               JOIN locations l ON l.id = u.zone_id
               WHERE {where}
@@ -219,9 +221,9 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
                   COALESCE(SUM(CASE WHEN payment_mode = 'upi' THEN total ELSE 0 END),0) AS upi_total,
                   COALESCE((SELECT SUM(ii.qty) FROM invoice_items ii
                               JOIN invoices i2 ON i2.id = ii.invoice_id
-                             WHERE i2.cashier_id = ?),0) AS books_sold,
+                             WHERE i2.cashier_id = ? AND i2.status = 'paid'),0) AS books_sold,
                   MAX(created_at) AS last_sale
-           FROM invoices WHERE cashier_id = ?""",
+           FROM invoices WHERE cashier_id = ? AND status = 'paid'""",
         (user_id, user_id),
     ).fetchone()
 
@@ -244,7 +246,7 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
            FROM invoice_items ii
            JOIN invoices i ON i.id = ii.invoice_id
            JOIN books b ON b.id = ii.book_id
-           WHERE i.cashier_id = ?
+           WHERE i.cashier_id = ? AND i.status = 'paid'
            GROUP BY b.id ORDER BY revenue DESC""",
         (user_id,),
     ).fetchall()

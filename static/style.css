@@ -374,6 +374,7 @@ table tr[hidden] { display: none !important; }
 .upi-qr-panel { margin-top: 12px; text-align: center; }
 .upi-qr-panel p { color: #6b5a3a; font-size: 13px; margin-bottom: 8px; }
 .upi-qr-panel img { display: block; width: min(100%, 360px); height: auto; margin: 0 auto; }
+.upi-qr-panel a { display: inline-block; margin-top: 8px; }
 .kbd { background: #eee4cf; border: 1px solid #d8c9a8; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 
 #scanBox input { font-family: Consolas, monospace; }

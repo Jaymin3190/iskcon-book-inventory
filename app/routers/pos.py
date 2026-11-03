@@ -1,21 +1,31 @@
 import re
+import logging
+import sqlite3
 from html import escape
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from ..auth import require_roles
 from ..database import get_db
 from ..services.audit import log_audit
+from ..services.invoice_pdf import build_invoice_pdf
 from ..services.ledger import check_available, move_stock
+from ..services.razorpay import (
+    RazorpayError,
+    close_qr_code,
+    create_qr_code,
+    is_configured as razorpay_is_configured,
+)
 from ..services.scope import invoice_location_ids, location_ids
 from ..services.timezone import format_ist_date
 
 router = APIRouter(prefix="/api/pos", tags=["pos"])
 
 PAYMENT_MODES = ("cash", "upi")
+logger = logging.getLogger(__name__)
 
 
 def next_invoice_number(db, user) -> str:
@@ -67,6 +77,8 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(400, "Cart is empty")
     if data.payment_mode not in PAYMENT_MODES:
         raise HTTPException(400, f"Invalid payment mode. Valid: {', '.join(PAYMENT_MODES)}")
+    if data.payment_mode == "upi" and not razorpay_is_configured():
+        raise HTTPException(503, "Razorpay is not configured for UPI payments")
     customer_name = (data.customer_name or "").strip()
     customer_phone = (data.customer_phone or "").strip()
     if not customer_name:
@@ -108,25 +120,66 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     subtotal = sum(b["price"] * q for b, q in resolved)
     discount = min(data.discount, subtotal)
     total = round(subtotal - discount, 2)
+    if data.payment_mode == "upi" and total <= 0:
+        raise HTTPException(400, "UPI payments must have a positive total")
 
-    num = next_invoice_number(db, user)
-    cur = db.execute(
-        """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone,
-                                 payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)
-           VALUES (?,?,?,?,?,?, 'paid', ?, ?, ?, ?)""",
-        (num, loc_id, customer_name, customer_phone,
-         data.payment_mode, data.payment_ref, subtotal, discount, total, user["id"]),
-    )
-    iid = cur.lastrowid
-    for book, q in resolved:
-        db.execute(
-            "INSERT INTO invoice_items (invoice_id, book_id, qty, unit_price, line_total) VALUES (?,?,?,?,?)",
-            (iid, book["id"], q, book["price"], round(book["price"] * q, 2)),
+    qr_code = None
+    try:
+        num = next_invoice_number(db, user)
+        status = "pending" if data.payment_mode == "upi" else "paid"
+        cur = db.execute(
+            """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone,
+                                     payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (num, loc_id, customer_name, customer_phone,
+             data.payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"]),
         )
-        move_stock(db, book["id"], loc_id, -q, "SALE_OUT", "invoices", iid, user["id"], num)
-    db.commit()
-    log_audit(db, user["id"], "INVOICE_CREATE", "invoices", iid, f"{num} total {total} {data.payment_mode}", user["username"])
-    return {"invoice_id": iid, "invoice_number": num, "total": total, "subtotal": subtotal, "discount": discount}
+        iid = cur.lastrowid
+        for book, q in resolved:
+            db.execute(
+                "INSERT INTO invoice_items (invoice_id, book_id, qty, unit_price, line_total) VALUES (?,?,?,?,?)",
+                (iid, book["id"], q, book["price"], round(book["price"] * q, 2)),
+            )
+            move_stock(
+                db, book["id"], loc_id, -q, "SALE_OUT", "invoices", iid, user["id"], num,
+                commit=False,
+            )
+        if data.payment_mode == "upi":
+            qr_code = create_qr_code(num, total)
+            db.execute(
+                """UPDATE invoices
+                      SET razorpay_qr_code_id = ?, razorpay_qr_image_url = ?
+                    WHERE id = ?""",
+                (qr_code["id"], qr_code["image_url"], iid),
+            )
+        db.commit()
+    except RazorpayError as error:
+        db.rollback()
+        raise HTTPException(502, str(error)) from error
+    except sqlite3.Error:
+        db.rollback()
+        if qr_code:
+            try:
+                close_qr_code(qr_code["id"])
+            except RazorpayError as error:
+                logger.error("Could not close orphan Razorpay QR %s: %s", qr_code["id"], error)
+        raise
+
+    log_audit(db, user["id"], "INVOICE_CREATE", "invoices", iid, f"{num} total {total} {data.payment_mode} {status}", user["username"])
+    result = {
+        "invoice_id": iid,
+        "invoice_number": num,
+        "total": total,
+        "subtotal": subtotal,
+        "discount": discount,
+        "status": status,
+    }
+    if qr_code:
+        result.update(
+            razorpay_qr_code_id=qr_code["id"],
+            razorpay_qr_image_url=qr_code["image_url"],
+        )
+    return result
 
 
 @router.get("/invoices/{invoice_id}")
@@ -290,6 +343,8 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
     ).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if inv["status"] != "paid":
+        raise HTTPException(409, "Only paid invoices can be printed as receipts")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
@@ -301,6 +356,38 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
         (invoice_id,),
     ).fetchall()
     return invoice_html(inv, items)
+
+
+@router.get("/invoices/{invoice_id}/pdf")
+def download_invoice_pdf(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+    inv = db.execute(
+        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+           FROM invoices i
+           JOIN locations l ON l.id = i.location_id
+           LEFT JOIN users u ON u.id = i.cashier_id
+           WHERE i.id = ?""",
+        (invoice_id,),
+    ).fetchone()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv["status"] != "paid":
+        raise HTTPException(409, "Only paid invoices can be downloaded as receipts")
+    if inv["location_id"] not in invoice_location_ids(db, user):
+        raise HTTPException(403, "Forbidden")
+    if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
+        raise HTTPException(403, "Distributors can only access their own bills")
+    items = db.execute(
+        """SELECT ii.*, b.title, b.barcode
+           FROM invoice_items ii JOIN books b ON b.id = ii.book_id
+           WHERE ii.invoice_id = ?""",
+        (invoice_id,),
+    ).fetchall()
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "-", inv["invoice_number"])
+    return Response(
+        content=build_invoice_pdf(inv, items),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'},
+    )
 
 
 @router.delete("/invoices/{invoice_id}")
@@ -322,14 +409,22 @@ def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_rol
             409,
             "This invoice has already been handed over to the temple. Void that payment-in first.",
         )
+    if inv["status"] == "pending":
+        raise HTTPException(409, "This invoice has a pending Razorpay payment and cannot be deleted")
+    stock_restored = inv["status"] == "paid"
     items = db.execute(
         "SELECT * FROM invoice_items WHERE invoice_id = ?",
         (invoice_id,),
     ).fetchall()
-    for it in items:
-        move_stock(db, it["book_id"], inv["location_id"], it["qty"], "SALE_REVERSED", "invoices", invoice_id, user["id"], "invoice deleted")
+    if stock_restored:
+        for it in items:
+            move_stock(db, it["book_id"], inv["location_id"], it["qty"], "SALE_REVERSED", "invoices", invoice_id, user["id"], "invoice deleted", commit=False)
     db.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
     db.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
     db.commit()
-    log_audit(db, user["id"], "INVOICE_DELETE", "invoices", invoice_id, f"{inv['invoice_number']} restocked {len(items)} lines", user["username"])
-    return {"ok": True, "restocked_lines": len(items)}
+    log_audit(db, user["id"], "INVOICE_DELETE", "invoices", invoice_id, f"{inv['invoice_number']} restocked {len(items) if stock_restored else 0} lines", user["username"])
+    return {
+        "ok": True,
+        "restocked_lines": len(items) if stock_restored else 0,
+        "stock_restored": stock_restored,
+    }

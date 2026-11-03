@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import BASE_DIR, STATIC_DIR
 from .database import init_db
-from .routers import auth, catalogue, locations, payments, pos, reports, stock, users
+from .routers import auth, catalogue, locations, payments, pos, razorpay, reports, stock, users
 from .seed import seed
 
 init_db()
@@ -41,7 +41,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         pass
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
-for r in (auth.router, users.router, catalogue.router, locations.router, stock.router, pos.router, reports.router, payments.router):
+for r in (auth.router, users.router, catalogue.router, locations.router, stock.router, pos.router, reports.router, payments.router, razorpay.router):
     app.include_router(r)
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

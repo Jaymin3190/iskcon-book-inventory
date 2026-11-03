@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], payNumbers: [] };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], payNumbers: [], invoicePdf: null };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -190,6 +190,7 @@ function setPageTitle(label) {
 function logout() {
   stopCam();
   state.token = ''; state.user = null; localStorage.removeItem('tk');
+  state.invoicePdf = null; state.pendingPayment = null;
   setSidebarOpen(false);
   document.getElementById('appView').hidden = true;
   document.getElementById('loginView').hidden = false;
@@ -397,10 +398,11 @@ async function zoneDetails(zoneId) {
       <td>${esc(i.cashier_name || '—')}<span class="cart-book-barcode">${esc(i.cashier_username || '')}</span></td>
       <td>${esc(i.customer_name || '—')}<span class="cart-book-barcode">${esc(i.customer_phone || '')}</span></td>
       <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
+      <td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td>
       <td>${i.books_qty}</td>
       <td>&#8377;${Number(i.total).toFixed(2)}</td>
-      <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'zone', ${zoneId})">Delete</button>` : ''}</td>
-    </tr>`).join('') || '<tr><td colspan="8" class="hint">No invoices in this zone yet.</td></tr>';
+      <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'zone', ${zoneId})">Delete</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="9" class="hint">No invoices in this zone yet.</td></tr>';
   openModal(`<h3>${esc(z.name || 'Zone')} &mdash; details</h3>
     <p class="hint">${esc(z.code || '')} &middot; ${z.stock_units ?? 0} stock units &middot; ${z.distributor_count ?? distributors.length} active distributor(s)</p>
     <div class="mini-stats">
@@ -427,7 +429,7 @@ async function zoneDetails(zoneId) {
     </table>
     <h4>Zone invoices (${invoices.length})</h4>
     <table>
-      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Customer</th><th>Payment</th><th>Qty</th><th>Total</th><th></th></tr>
+      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Customer</th><th>Payment</th><th>Status</th><th>Qty</th><th>Total</th><th></th></tr>
       ${invoiceRows}
     </table>
     <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`);
@@ -451,7 +453,7 @@ async function distributorDetails(userId, zoneId) {
       <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
       <td>${i.books_qty}</td>
       <td>&#8377;${Number(i.total).toFixed(2)}</td>
-      <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'dist', ${userId}, ${zoneId})">Delete</button>` : ''}</td>
+      <td><button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'dist', ${userId}, ${zoneId})">Delete</button>` : ''}</td>
     </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>';
   openModal(`<h3>${esc(d.name)}</h3>
     <p class="hint">@${esc(d.username)} &middot; ${esc(d.zone_name || '—')} &middot; ${d.is_active ? 'Active' : 'Inactive'} &middot; Joined ${esc(formatAuditTime(d.created_at))}</p>
@@ -979,8 +981,7 @@ async function pos() {
         <div class="form-row"><label>Discount (&#8377;)</label><input id="discount" type="number" min="0" value="" oninput="renderCart()"></div>
       </div>
       <div id="upiQrPanel" class="upi-qr-panel" hidden>
-        <p>Scan this QR code to pay with UPI.</p>
-        <img src="/upi-qr.jpeg" alt="ISKCON Jamnagar Books and Gifts UPI payment QR code">
+        <p>A fixed-amount Razorpay QR code will be generated after you save the invoice.</p>
       </div>
       <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
         <div><strong>Total:</strong> <span id="cartTotal">&#8377;0.00</span></div>
@@ -1448,11 +1449,6 @@ async function checkout() {
   const payRef = document.getElementById('payRef').value.trim();
   if (!custName) return toast('Customer name is required', 'error');
   if (!custPhone) return toast('Phone number is required', 'error');
-  const whatsappNumber = custPhone ? whatsappPhoneNumber(custPhone) : null;
-  if (!whatsappNumber) return toast('Enter a valid WhatsApp number with country code if outside India', 'error');
-  const shareWindow = whatsappNumber ? window.open('about:blank', '_blank') : null;
-  if (whatsappNumber && !shareWindow) return toast('Allow pop-ups to open WhatsApp before saving the invoice', 'error');
-  if (shareWindow) shareWindow.opener = null;
   const purchasedItems = state.cart.map(i => ({ title: i.title, qty: i.qty }));
   let res;
   try {
@@ -1464,55 +1460,174 @@ async function checkout() {
       items: state.cart.map(i => ({ barcode: i.barcode, qty: i.qty })),
     }});
   } catch (e) {
-    if (shareWindow && !shareWindow.closed) shareWindow.close();
     toast(e.message, 'error');
     return;
   }
-  let shareError = '';
-  if (whatsappNumber && shareWindow?.closed) {
-    shareError = 'Invoice saved, but the WhatsApp window was closed';
-  } else if (whatsappNumber && shareWindow) {
-    const itemSummary = purchasedItems.map(i => `${i.title} x ${i.qty}`).join('\n');
-    const message = [
-      `Hare Krishna ${custName},`,
-      'Thank you for your purchase from ISKCON Jamnagar Books & Gifts.',
-      `Invoice: ${res.invoice_number}`,
-      `Items:\n${itemSummary}`,
-      `Total: Rs. ${Number(res.total).toFixed(2)}`,
-      `Payment: ${payMode.toUpperCase()}${payRef ? ` (${payRef})` : ''}`,
-      'Thank you!',
-    ].join('\n\n');
-    try {
-      shareWindow.location.href = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
-      shareWindow.focus();
-    } catch (e) {
-      shareWindow.close();
-      shareError = `Invoice saved, but WhatsApp could not be opened: ${e.message}`;
-    }
-  }
   state.cart = [];
-  openModal(`<h3>Invoice ${esc(res.invoice_number)}</h3>
-    <p>Total: &#8377;${res.total.toFixed(2)} &nbsp;(subtotal &#8377;${res.subtotal.toFixed(2)}, discount &#8377;${res.discount.toFixed(2)})</p>
-    <p style="font-size:13px;color:#6b5a3a">Payment: ${esc(payMode.toUpperCase())}${payRef ? ' (' + esc(payRef) + ')' : ''}</p>
-    ${shareError ? `<p class="hint">${esc(shareError)}</p>` : whatsappNumber ? '<p class="hint">WhatsApp opened in a new tab with the invoice message. Tap Send there to notify the customer.</p>' : ''}
-    <button class="primary" onclick="printInvoice(${res.invoice_id})">Print / download invoice</button>
-    <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>`);
-  toast(shareError || 'Billed: ' + res.invoice_number, shareError ? 'error' : 'success');
+  if (payMode === 'upi') {
+    state.pendingPayment = {
+      invoiceId: res.invoice_id,
+      invoiceNumber: res.invoice_number,
+      customerName: custName,
+      total: Number(res.total),
+      items: purchasedItems,
+    };
+    showPendingPayment(res);
+    toast('Invoice saved; waiting for Razorpay payment confirmation', 'success');
+    return;
+  }
+  showSavedInvoice(res, `Payment: CASH${payRef ? ` (${payRef})` : ''}`);
+  toast('Invoice saved: ' + res.invoice_number, 'success');
 }
 
-async function printInvoice(invoiceId) {
-  const w = window.open('', '_blank');
-  if (!w) { toast('Allow pop-ups to open the invoice in a new tab', 'error'); return; }
+function showSavedInvoice(invoice, detail) {
+  openModal(`<h3>Invoice saved</h3>
+    <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
+    <p class="hint">${esc(detail)}. Share the PDF using the device share menu (choose WhatsApp or another app), or download it.</p>
+    <div class="toolbar">
+      <button id="shareInvoicePdfButton" class="primary" disabled onclick="shareInvoicePdf(${invoice.invoice_id})">Share PDF</button>
+      <button id="downloadInvoicePdfButton" class="action" disabled onclick="downloadInvoicePdf(${invoice.invoice_id})">Download PDF</button>
+    </div>
+    <p id="invoicePdfStatus" class="hint">Preparing invoice PDF...</p>
+    <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>`);
+  prepareInvoicePdf(invoice.invoice_id);
+}
+
+async function fetchInvoicePdf(invoiceId) {
+  if (state.invoicePdf?.invoiceId === invoiceId) return state.invoicePdf.file;
+  const response = await fetch(`/api/pos/invoices/${invoiceId}/pdf`, {
+    headers: { Authorization: 'Bearer ' + state.token },
+  });
+  if (response.status === 401) { logout(); throw new Error('Session expired'); }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || response.statusText || 'Could not load invoice PDF');
+  }
+  const file = await response.blob();
+  state.invoicePdf = { invoiceId, file };
+  return file;
+}
+
+async function prepareInvoicePdf(invoiceId) {
+  const shareButton = document.getElementById('shareInvoicePdfButton');
+  const downloadButton = document.getElementById('downloadInvoicePdfButton');
+  const status = document.getElementById('invoicePdfStatus');
   try {
-    const res = await fetch('/api/pos/invoices/' + invoiceId + '/print', { headers: { Authorization: 'Bearer ' + state.token } });
-    if (!res.ok) throw new Error('Could not load invoice');
-    const html = await res.text();
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-    w.location.href = url;
-    w.focus();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    await fetchInvoicePdf(invoiceId);
+    if (shareButton) shareButton.disabled = false;
+    if (downloadButton) downloadButton.disabled = false;
+    if (status) status.textContent = 'PDF is ready to share or download.';
   } catch (e) {
-    try { w.close(); } catch (_) {}
+    if (shareButton) shareButton.disabled = false;
+    if (downloadButton) downloadButton.disabled = false;
+    if (status) status.textContent = `PDF could not be prepared yet: ${e.message}. Select an option to retry.`;
+  }
+}
+
+function savePdfFile(file, invoiceId) {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `invoice-${invoiceId}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function downloadInvoicePdf(invoiceId) {
+  try {
+    const file = await fetchInvoicePdf(invoiceId);
+    savePdfFile(file, invoiceId);
+    toast('Invoice PDF downloaded', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function shareInvoicePdf(invoiceId) {
+  try {
+    const cached = state.invoicePdf?.invoiceId === invoiceId ? state.invoicePdf.file : null;
+    if (cached && typeof File !== 'undefined') {
+      const cachedFile = new File([cached], `invoice-${invoiceId}.pdf`, { type: 'application/pdf' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [cachedFile] })) {
+        await navigator.share({
+          files: [cachedFile],
+          title: `Invoice ${invoiceId}`,
+          text: 'Thank you for your purchase. Please find the invoice attached.',
+        });
+        toast('Invoice shared', 'success');
+        return;
+      }
+    }
+
+    const blob = cached || await fetchInvoicePdf(invoiceId);
+    const file = typeof File === 'undefined' ? null : new File([blob], `invoice-${invoiceId}.pdf`, { type: 'application/pdf' });
+    if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: `Invoice ${invoiceId}`, text: 'Thank you for your purchase. Please find the invoice attached.' });
+      toast('Invoice shared', 'success');
+      return;
+    }
+    savePdfFile(blob, invoiceId);
+    toast('PDF downloaded. This browser cannot share attachments directly.', 'info');
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    toast(e.message, 'error');
+  }
+}
+
+function showPendingPayment(invoice) {
+  openModal(`<h3>Payment pending — ${esc(invoice.invoice_number)}</h3>
+    <p>Total: &#8377;${Number(invoice.total).toFixed(2)}</p>
+    <p class="hint">Ask the customer to scan this one-time QR code. The invoice is finalized only after Razorpay confirms the payment.</p>
+    <div class="upi-qr-panel">
+      <img src="${esc(invoice.razorpay_qr_image_url)}" alt="Razorpay payment QR code" onerror="this.hidden=true">
+    </div>
+    <p id="razorpayPaymentStatus" class="hint">Waiting for payment confirmation...</p>
+    <button class="primary" onclick="checkInvoicePayment()">Check payment status</button>
+    <button class="action" onclick="closeModal(); refreshCurrent()">Close</button>`);
+}
+
+async function checkInvoicePayment(invoiceId) {
+  const pending = state.pendingPayment?.invoiceId === invoiceId || !invoiceId
+    ? state.pendingPayment
+    : null;
+  const id = invoiceId || pending?.invoiceId;
+  if (!id) return;
+  const statusEl = document.getElementById('razorpayPaymentStatus');
+  if (statusEl) statusEl.textContent = 'Checking with the server...';
+  try {
+    const invoice = await api('/api/pos/invoices/' + id);
+    if (invoice.status === 'paid') {
+      const confirmed = pending || {
+        invoiceId: id,
+        invoiceNumber: invoice.invoice_number,
+        customerName: invoice.customer_name,
+        total: Number(invoice.total),
+        items: invoice.items.map(i => ({ title: i.title, qty: i.qty })),
+      };
+      state.pendingPayment = { ...confirmed, paymentRef: invoice.razorpay_payment_id };
+      showSavedInvoice({
+        ...invoice,
+        invoice_id: id,
+        invoice_number: confirmed.invoiceNumber,
+        total: confirmed.total,
+      }, 'Razorpay payment confirmed');
+      toast('Payment confirmed', 'success');
+    } else if (invoice.status === 'failed') {
+      if (pending) {
+        openModal(`<h3>QR expired — ${esc(pending.invoiceNumber)}</h3>
+          <p class="hint">No payment was received before the QR code closed. The reserved stock has been restored; create a new invoice to retry.</p>
+          <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>`);
+      }
+      if (state.pendingPayment?.invoiceId === id) state.pendingPayment = null;
+      toast('Payment QR expired; stock restored', 'error');
+    } else if (invoice.status === 'pending') {
+      if (statusEl) statusEl.textContent = 'Still waiting for Razorpay payment confirmation.';
+      else toast('Still waiting for Razorpay payment confirmation', 'info');
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Could not check payment status.';
     toast(e.message, 'error');
   }
 }
@@ -1523,24 +1638,25 @@ async function invoiceList() {
   openModal(`<h3>Invoice history</h3>
     <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only.</p>
     <table>
-      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Total</th><th>Actions</th></tr>
+      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Actions</th></tr>
       ${rows.map(i => `<tr>
         <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
-        <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td>&#8377;${Number(i.total).toFixed(2)}</td>
-        <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="hint">No invoices yet.</td></tr>'}
+        <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td>
+        <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="9" class="hint">No invoices yet.</td></tr>'}
     </table>`);
 }
 
 async function invoiceDelete(invoiceId, view, ...args) {
-  if (!confirm(`Delete invoice #${invoiceId}? Stock will be returned to the location.`)) return;
+  if (!confirm(`Delete invoice #${invoiceId}? Stock from a paid invoice will be returned; expired QR stock was already restored.`)) return;
+  let result;
   try {
-    await api('/api/pos/invoices/' + invoiceId, { method: 'DELETE' });
+    result = await api('/api/pos/invoices/' + invoiceId, { method: 'DELETE' });
   } catch (e) {
     toast(e.message, 'error');
     return;
   }
-  toast('Invoice deleted and stock restored', 'success');
+  toast(result.stock_restored ? 'Invoice deleted and stock restored' : 'Invoice deleted; stock was already restored', 'success');
   try {
     if (view === 'zone' || view === 'dist') await dashboard();
     if (view === 'zone') await zoneDetails(args[0]);

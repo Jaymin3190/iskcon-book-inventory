@@ -175,7 +175,7 @@ code, _ = call("POST", "/api/pos/invoices", token=dist_t, body={
 check("distributor cannot bill from warehouse", code == 403)
 
 code, led = call("POST", "/api/pos/invoices", token=dist_t, body={
-    "customer_name": "Temple Zone", "customer_phone": "9999999999", "payment_mode": "upi",
+    "customer_name": "Temple Zone", "customer_phone": "9999999999", "payment_mode": "cash",
     "items": [{"barcode": "9780892131565", "qty": 4}],
 })
 check("distributor billing at zone", code == 200 and led["total"] == 400.0, led)
@@ -207,7 +207,7 @@ check("distributor cannot access sales reports", code == 403)
 code, zone_sales = call("GET", "/api/reports/distributor-sales", token=zone_t)
 check("zone leader sees distributor book and payment sales", code == 200 and any(
     row["invoice_number"] == led["invoice_number"] and row["distributor_name"] == "Distributor"
-    and row["book_title"] == "Raja-vidya" and row["payment_mode"] == "upi" and row["qty"] == 4
+    and row["book_title"] == "Raja-vidya" and row["payment_mode"] == "cash" and row["qty"] == 4
     for row in zone_sales
 ), zone_sales)
 code, admin_sales = call("GET", "/api/reports/distributor-sales", token=super_t)
@@ -230,6 +230,14 @@ with urllib.request.urlopen(req) as resp:
     html_body = resp.read().decode()
 check("printable invoice HTML", "<html" in html_body.lower() or "doctype" in html_body.lower())
 check("printed invoice shows cashier display name", "Cashier: Temple Admin" in html_body)
+
+req = urllib.request.Request(f"{BASE}/api/pos/invoices/{inv['invoice_id']}/pdf")
+req.add_header("Authorization", "Bearer " + temple_t)
+with urllib.request.urlopen(req) as resp:
+    pdf_body = resp.read()
+    pdf_disposition = resp.headers.get("Content-Disposition", "")
+check("invoice PDF download", pdf_body.startswith(b"%PDF-")
+      and "attachment" in pdf_disposition and ".pdf" in pdf_disposition)
 
 # --- stock count ---
 code, cnt = call("POST", "/api/stock/counts", token=temple_t, body={"location_id": 1})
@@ -298,7 +306,7 @@ zone2 = next((z for z in zones if z["id"] == 2), {})
 check("zone overview includes stock and cash/UPI totals", zone2.get("stock_units", 0) > 0
       and zone2.get("stock_value", 0) > 0 and zone2.get("distributor_count") == 1
       and zone2.get("invoice_count") == 2 and zone2.get("revenue") == 1300.0
-      and zone2.get("cash_total") == 900.0 and zone2.get("upi_total") == 400.0, zone2)
+      and zone2.get("cash_total") == 1300.0 and zone2.get("upi_total") == 0, zone2)
 code, my_zones = call("GET", "/api/reports/zones", token=zone_t)
 check("zone admin sees only own zone", code == 200 and len(my_zones) == 1 and my_zones[0]["id"] == 2)
 code, _ = call("GET", "/api/reports/zones", token=temple_t)
@@ -307,7 +315,7 @@ check("temple user cannot view zone overview", code == 403)
 code, zone_distributors = call("GET", "/api/reports/distributors?zone_id=2", token=zone_t)
 check("zone admin sees distributor totals", code == 200 and any(
     d["username"] == "distributor" and d["invoice_count"] == 1 and d["revenue"] == 400.0
-    and d["upi_total"] == 400.0 and d["cash_total"] == 0 and d["books_sold"] == 4
+    and d["upi_total"] == 0 and d["cash_total"] == 400.0 and d["books_sold"] == 4
     for d in zone_distributors
 ), zone_distributors)
 code, _ = call("GET", "/api/reports/distributors?zone_id=3", token=zone_t)
@@ -330,7 +338,7 @@ check("zone admin can bill at own zone", code == 200
 
 code, zone_inv2 = call("POST", "/api/pos/invoices", token=zone_t, body={
     "customer_name": "Zone Walk-in 2", "customer_phone": "9999999999",
-    "payment_mode": "upi", "items": [{"barcode": "9780892131343", "qty": 1}],
+    "payment_mode": "cash", "items": [{"barcode": "9780892131343", "qty": 1}],
 })
 check("invoice numbers increment per user", code == 200
       and zone_inv2["invoice_number"] == "INV-leader-temple-zone-0002", zone_inv2)
@@ -404,28 +412,28 @@ code, pending = call("GET", f"/api/payments/pending?user_id={zone_user_id}", tok
 pending_numbers = {p["invoice_number"] for p in pending}
 check("pending cash receipts cover the whole zone team", code == 200
       and pending_numbers == {zone_inv["invoice_number"], zone_inv3["invoice_number"],
-                              dist_cash["invoice_number"]}, pending)
+                              dist_cash["invoice_number"], led["invoice_number"]}, pending)
 check("pending receipts show who billed them", any(
     p["invoice_number"] == dist_cash["invoice_number"] and p["cashier_name"] == "Distributor"
     for p in pending
 ), pending)
 
 zone_team_numbers = [zone_inv["invoice_number"], zone_inv3["invoice_number"],
-                     dist_cash["invoice_number"]]
+                     dist_cash["invoice_number"], led["invoice_number"]]
 code, preview = call("POST", "/api/payments/preview", token=temple_t, body={
     "user_id": zone_user_id,
     "receipt_numbers": zone_team_numbers,
 })
 check("payment preview auto-sums the zone team's receipts", code == 200
-      and preview["total"] == 900.0 and preview["count"] == 3 and not preview["errors"], preview)
+      and preview["total"] == 1300.0 and preview["count"] == 4 and not preview["errors"], preview)
 check("payment preview labels distributor cash", any(
     i["cashier_name"] == "Distributor" for i in preview["items"]
 ), preview)
 code, preview_bad = call("POST", "/api/payments/preview", token=temple_t, body={
     "user_id": zone_user_id,
-    "receipt_numbers": [led["invoice_number"], inv["invoice_number"]],
+    "receipt_numbers": [inv["invoice_number"], "NO-SUCH-RECEIPT"],
 })
-check("payment preview rejects non-cash and temple-billed receipts", code == 200
+check("payment preview rejects temple-billed and unknown receipts", code == 200
       and preview_bad["count"] == 0 and len(preview_bad["errors"]) == 2, preview_bad)
 code, _ = call("POST", "/api/payments", token=zone_t, body={
     "user_id": zone_user_id, "receipt_numbers": [zone_inv["invoice_number"]],
@@ -439,7 +447,7 @@ code, payment = call("POST", "/api/payments", token=temple_t, body={
 })
 check("temple admin records a cash handover", code == 200
       and payment["receipt_number"] == "RCV-templeAdmin-0001"
-      and payment["amount"] == 900.0 and len(payment["items"]) == 3, payment)
+      and payment["amount"] == 1300.0 and len(payment["items"]) == 4, payment)
 check("payment in includes distributor cash", any(
     i["cashier_name"] == "Distributor" for i in payment["items"]
 ), payment)
@@ -459,7 +467,7 @@ check("zone admin sees the temple confirmation", code == 200
       and any(p["id"] == payment["id"] for p in zone_payments), zone_payments)
 code, zone_payment = call("GET", f"/api/payments/{payment['id']}", token=zone_t)
 check("zone admin can open the cash receipt", code == 200
-      and len(zone_payment["items"]) == 3, zone_payment)
+      and len(zone_payment["items"]) == 4, zone_payment)
 code, other_zone_payments = call("GET", "/api/payments", token=other_zone_t)
 check("another zone admin does not see the handover", code == 200 and not other_zone_payments)
 code, _ = call("GET", f"/api/payments/{payment['id']}", token=other_zone_t)

@@ -139,6 +139,9 @@ CREATE TABLE IF NOT EXISTS invoices (
     payment_mode TEXT NOT NULL CHECK (payment_mode IN ('cash','upi','card','ledger')),
     payment_ref TEXT,
     status TEXT NOT NULL DEFAULT 'paid',
+    razorpay_qr_code_id TEXT,
+    razorpay_qr_image_url TEXT,
+    razorpay_payment_id TEXT,
     subtotal NUMERIC NOT NULL DEFAULT 0,
     discount NUMERIC NOT NULL DEFAULT 0,
     total NUMERIC NOT NULL DEFAULT 0,
@@ -197,6 +200,12 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     ip TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS razorpay_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    received_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -249,11 +258,23 @@ def _migrate_users_zone_only(conn):
         pass
 
 
+def _migrate_razorpay(conn):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(invoices)")}
+    for column in ("razorpay_qr_code_id", "razorpay_qr_image_url", "razorpay_payment_id"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT")
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_razorpay_qr_code_id
+           ON invoices(razorpay_qr_code_id)"""
+    )
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
     _migrate_users_zone_only(conn)
+    _migrate_razorpay(conn)
     conn.commit()
     conn.close()

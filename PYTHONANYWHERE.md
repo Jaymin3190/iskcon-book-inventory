@@ -36,12 +36,15 @@ so code updates do not overwrite it.
        "/home/<username>/iskcon-book-inventory-data/inventory.db"
    )
    os.environ["SECRET_KEY"] = "<generate-a-long-random-secret>"
+   os.environ["RAZORPAY_KEY_ID"] = "<Razorpay API key ID>"
+   os.environ["RAZORPAY_KEY_SECRET"] = "<Razorpay API key secret>"
+   os.environ["RAZORPAY_WEBHOOK_SECRET"] = "<Razorpay webhook secret>"
 
    from app.wsgi_adapter import application
    ```
 
    Replace `<username>` and set `SECRET_KEY` to a unique, randomly generated
-   value. Keep both settings in the WSGI file and do not commit secrets. The
+   value. Keep all secrets in the WSGI file and do not commit them. The
    adapter starts its event-loop thread on the first request so it is created
    inside the uWSGI worker, not before the worker starts.
 5. Set the Web tab's source code and working directory to
@@ -52,9 +55,15 @@ so code updates do not overwrite it.
 After pulling new code into the checkout:
 
 1. Run `git pull` in a Bash console inside the project directory.
-2. Click **Reload** on the **Web** tab. Python code changes are only picked up
+2. Update dependencies in the virtual environment:
+
+   ```bash
+   ~/.virtualenvs/iskcon-book-inventory/bin/pip install -r requirements.txt
+   ```
+
+3. Click **Reload** on the **Web** tab. Python code changes are only picked up
    after a reload.
-3. Hard-refresh the browser once (Ctrl+F5 / Cmd+Shift+R) so it drops any old
+4. Hard-refresh the browser once (Ctrl+F5 / Cmd+Shift+R) so it drops any old
    HTML it cached before the update.
 
 The app sends `Cache-Control: no-store` for HTML and `no-cache` for CSS/JS, and
@@ -67,6 +76,23 @@ bypass the app's cache headers.
 Camera barcode scanning uses the mobile browser's camera and requires HTTPS
 and camera permission. The scanner processes frames in the browser; camera
 images are not uploaded to the app.
+
+## Razorpay UPI QR payments
+
+Enable Razorpay's QR Codes feature for the account, then add the three
+Razorpay environment variables shown in the WSGI example. The key ID and API
+key secret are used only by the server to create one-time, fixed-amount UPI QR
+codes. The webhook secret is configured separately in Razorpay when creating
+the webhook; it is not the API key secret.
+
+Create a webhook for the public HTTPS URL
+`https://<your-domain>/api/razorpay/webhook` and subscribe to
+`qr_code.credited` and `qr_code.closed`. Copy the webhook secret into
+`RAZORPAY_WEBHOOK_SECRET`. The app verifies the signature against the exact
+request body, settles an invoice only for a captured UPI payment of the
+expected INR amount, and restores reserved stock when Razorpay closes an unpaid
+QR. Do not test this flow with live credentials or real payments; use Razorpay's
+test account and test keys for payment testing.
 
 The app creates the schema and seeds demo data when it first starts. The seed
 step only runs when there are no users. Change or remove the seeded demo
