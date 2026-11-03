@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [] };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], payNumbers: [] };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -31,6 +31,7 @@ const TABS = [
   { id: 'transfers', label: 'Transfers', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'returns', label: 'Returns', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'pos', label: 'POS Billing', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
+  { id: 'payments', label: 'Payment In', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'reports', label: 'Reports', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'audit', label: 'Audit Trail', roles: ['super_admin', 'zone_admin'] },
   { id: 'users', label: 'Users', roles: ['super_admin', 'zone_admin'] },
@@ -40,7 +41,7 @@ const TABS = [
 const TAB_GROUPS = [
   { label: 'Overview', tabs: ['dashboard'] },
   { label: 'Catalogue', tabs: ['books', 'stock'] },
-  { label: 'Operations', tabs: ['transfers', 'returns', 'pos'] },
+  { label: 'Operations', tabs: ['transfers', 'returns', 'pos', 'payments'] },
   { label: 'Insights', tabs: ['reports', 'audit'] },
   { label: 'Administration', tabs: ['users', 'locations'] },
 ];
@@ -52,6 +53,7 @@ const NAV_ICONS = {
   transfers: '<path d="M4 7h13l-3-3"/><path d="M20 17H7l3 3"/>',
   returns: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>',
   pos: '<circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M2 3h3l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 7H6"/>',
+  payments: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01"/><path d="M18 12h.01"/>',
   reports: '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
   audit: '<path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/><path d="M8 11h8"/><path d="M8 15h8"/><path d="M8 19h5"/>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/>',
@@ -67,7 +69,7 @@ function navButton(tab) {
 
 /* ---- table filters ---- */
 // Tables with editable cells opt out: hiding a row while someone is typing in it would lose their place.
-const TABLE_FILTER_SKIP = new Set(['cartTable', 'scTable']);
+const TABLE_FILTER_SKIP = new Set(['cartTable', 'scTable', 'payCartTable', 'payPendingTable', 'payDetailTable']);
 
 function isTableHeaderRow(row) {
   if (row.parentElement && row.parentElement.tagName === 'THEAD') return true;
@@ -140,7 +142,7 @@ function enhanceTableFilters() {
   });
 }
 
-const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, reports, audit, users, locations };
+const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, payments, reports, audit, users, locations };
 
 function renderCurrentTab() {
   return RENDER[state.activeTab]().then(() => {
@@ -1494,6 +1496,214 @@ async function invoiceDelete(invoiceId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+/* ---- payment in (cash handover to the temple) ---- */
+async function payments() {
+  const rows = await api('/api/payments');
+  const canRecord = hasAnyRole('super_admin', 'temple');
+  const total = rows.reduce((a, r) => a + Number(r.amount || 0), 0);
+  document.getElementById('content').innerHTML = `
+    <div class="stats">
+      <div class="stat"><div class="num">${rows.length}</div><div class="lbl">Cash handovers</div></div>
+      <div class="stat"><div class="num">&#8377;${total.toFixed(2)}</div><div class="lbl">Total cash received</div></div>
+    </div>
+    <div class="card">
+      <h2>Payment in</h2>
+      <p class="hint">${canRecord
+        ? 'Record cash handed over by a zone leader. This includes the cash billed by their distributors, and the total is summed from the receipt numbers.'
+        : 'Cash you have handed over to the temple, including your distributors\' cash. Open or print any confirmation below.'}</p>
+      <div class="toolbar">${canRecord ? '<button class="primary" onclick="paymentForm()">New payment in</button>' : ''}</div>
+      <div class="table-scroll"><table>
+        <tr><th>Receipt</th><th>Date</th><th>Zone admin</th><th>Zone</th><th>Receipts</th><th>Cash received</th><th>Confirmed by</th><th>Actions</th></tr>
+        ${rows.map(r => `<tr>
+          <td>${esc(r.receipt_number)}</td>
+          <td>${esc(formatAuditTime(r.created_at))}</td>
+          <td>${esc(r.zone_admin_name)}<span class="cart-book-barcode">${esc(r.zone_admin_username)}</span></td>
+          <td>${esc(r.zone_name)}</td>
+          <td>${r.invoice_count}</td>
+          <td>&#8377;${Number(r.amount).toFixed(2)}</td>
+          <td>${esc(r.recorded_by_name)}</td>
+          <td><button class="action" onclick="paymentDetail(${r.id})">View</button><button class="action" onclick="printPayment(${r.id})">Print</button></td>
+        </tr>`).join('') || '<tr><td colspan="8" class="hint">No cash handovers yet.</td></tr>'}
+      </table></div>
+    </div>`;
+}
+
+async function paymentForm() {
+  let users;
+  try { users = await api('/api/payments/zone-admins'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  if (!users.length) { toast('No active zone admins found', 'error'); return; }
+  state.payNumbers = [];
+  openModal(`<h3>New payment in</h3>
+    <p class="hint">Select the zone leader handing over cash, then add the receipt numbers they are depositing. Receipts billed by their distributors count too, and the total is calculated for you.</p>
+    <div class="form-row"><label>Zone admin</label>
+      <select id="payUser" onchange="paymentPendingLoad()">
+        ${users.map(u => `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="toolbar" style="margin-top:12px">
+      <input id="payReceipt" placeholder="Scan / type receipt number, press Enter" autocomplete="off" style="flex:1;min-width:220px;font-family:Consolas,monospace" onkeydown="if(event.key==='Enter'){event.preventDefault();paymentAddReceipt();}">
+      <button class="action" onclick="paymentAddReceipt()">Add receipt</button>
+    </div>
+    <p id="payError" class="error"></p>
+    <h4>Receipts to deposit</h4>
+    <div class="table-scroll"><table id="payCartTable"></table></div>
+    <div class="pay-total"><strong>Total cash to deposit:</strong> <span id="payTotal">&#8377;0.00</span> <span id="payCount" class="hint"></span></div>
+    <h4>Pending cash receipts</h4>
+    <p class="hint">Tick receipts to add them in bulk. Only cash bills from this zone's leaders and distributors that have not been handed over appear here.</p>
+    <div class="table-scroll"><table id="payPendingTable"></table></div>
+    <div class="toolbar" style="margin-top:10px"><button class="action" onclick="paymentAddSelected()">Add selected</button></div>
+    <div class="form-row"><label>Note (optional)</label><input id="payNote" placeholder="e.g. Counted by the temple treasurer"></div>
+    <div class="toolbar"><button class="primary" onclick="paymentSubmit()">Confirm payment &amp; generate receipt</button><button class="action" onclick="closeModal()">Cancel</button></div>`);
+  paymentRenderCart([], 0, 0);
+  await paymentPendingLoad();
+}
+
+async function paymentPendingLoad() {
+  state.payNumbers = [];
+  const userSelect = document.getElementById('payUser');
+  if (!userSelect) return;
+  document.getElementById('payError').textContent = '';
+  paymentRenderCart([], 0, 0);
+  const table = document.getElementById('payPendingTable');
+  let rows = [];
+  try { rows = await api('/api/payments/pending?user_id=' + Number(userSelect.value)); }
+  catch (e) { toast(e.message, 'error'); }
+  if (!document.getElementById('payPendingTable')) return;
+  table.innerHTML = `<tr><th></th><th>Receipt</th><th>Billed by</th><th>Date</th><th>Amount</th></tr>` +
+    (rows.map(r => `<tr>
+      <td><input type="checkbox" class="pay-pick" value="${esc(r.invoice_number)}" aria-label="Add ${esc(r.invoice_number)}"></td>
+      <td>${esc(r.invoice_number)}</td>
+      <td>${esc(r.cashier_name || '—')}</td>
+      <td>${esc(formatAuditTime(r.created_at))}</td>
+      <td>&#8377;${Number(r.total).toFixed(2)}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="hint">No pending cash receipts for this zone admin.</td></tr>');
+  const input = document.getElementById('payReceipt');
+  if (input) input.focus();
+}
+
+function paymentRenderCart(items, total, count) {
+  const table = document.getElementById('payCartTable');
+  if (!table) return;
+  table.innerHTML = `<tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th>Location</th><th>Amount</th><th></th></tr>` +
+    (items.map(i => `<tr>
+      <td>${esc(i.invoice_number)}</td>
+      <td>${esc(i.cashier_name || '—')}</td>
+      <td>${esc(formatAuditTime(i.created_at))}</td>
+      <td>${esc(i.location_name)}</td>
+      <td>&#8377;${Number(i.amount).toFixed(2)}</td>
+      <td><button class="danger" data-receipt="${esc(i.invoice_number)}" onclick="paymentRemoveReceipt(this.dataset.receipt)" aria-label="Remove ${esc(i.invoice_number)}">&times;</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="hint">No receipts added yet.</td></tr>');
+  const totalEl = document.getElementById('payTotal');
+  if (totalEl) totalEl.innerHTML = '&#8377;' + Number(total).toFixed(2);
+  const countEl = document.getElementById('payCount');
+  if (countEl) countEl.textContent = count ? `${count} receipt${count === 1 ? '' : 's'}` : '';
+}
+
+async function paymentPreview() {
+  const errorEl = document.getElementById('payError');
+  if (!state.payNumbers.length) {
+    if (errorEl) errorEl.textContent = '';
+    paymentRenderCart([], 0, 0);
+    return;
+  }
+  const userSelect = document.getElementById('payUser');
+  if (!userSelect) return;
+  try {
+    const res = await api('/api/payments/preview', { method: 'POST', body: {
+      user_id: Number(userSelect.value), receipt_numbers: state.payNumbers,
+    }});
+    state.payNumbers = res.items.map(i => i.invoice_number);
+    if (errorEl) errorEl.textContent = res.errors.join(' ');
+    paymentRenderCart(res.items, res.total, res.count);
+  } catch (e) {
+    if (errorEl) errorEl.textContent = e.message;
+  }
+}
+
+function paymentAddReceipt() {
+  const input = document.getElementById('payReceipt');
+  const value = input.value.trim();
+  if (!value) return;
+  if (!state.payNumbers.includes(value)) state.payNumbers.push(value);
+  input.value = '';
+  input.focus();
+  paymentPreview();
+}
+
+function paymentAddSelected() {
+  const picked = [...document.querySelectorAll('#payPendingTable .pay-pick:checked')].map(c => c.value);
+  if (!picked.length) { toast('Select at least one pending receipt', 'error'); return; }
+  picked.forEach(n => { if (!state.payNumbers.includes(n)) state.payNumbers.push(n); });
+  paymentPreview();
+}
+
+function paymentRemoveReceipt(number) {
+  state.payNumbers = state.payNumbers.filter(n => n !== number);
+  paymentPreview();
+}
+
+async function paymentSubmit() {
+  if (!state.payNumbers.length) { toast('Add at least one receipt', 'error'); return; }
+  const userSelect = document.getElementById('payUser');
+  try {
+    const res = await api('/api/payments', { method: 'POST', body: {
+      user_id: Number(userSelect.value),
+      receipt_numbers: state.payNumbers,
+      note: document.getElementById('payNote').value.trim(),
+    }});
+    toast('Payment confirmed: ' + res.receipt_number, 'success');
+    paymentDetail(res.id);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function paymentDetail(paymentId) {
+  let p;
+  try { p = await api('/api/payments/' + paymentId); }
+  catch (e) { toast(e.message, 'error'); return; }
+  openModal(`<h3>Cash receipt ${esc(p.receipt_number)}</h3>
+    <div class="mini-stats">
+      ${miniStat('Cash received', '&#8377;' + Number(p.amount).toFixed(2))}
+      ${miniStat('Receipts', p.invoice_count)}
+      ${miniStat('Zone', esc(p.zone_name))}
+    </div>
+    <p class="hint">Handed over by <strong>${esc(p.zone_admin_name)}</strong> (${esc(p.zone_admin_username)})
+      on ${esc(formatAuditTime(p.created_at))} &middot; confirmed by ${esc(p.recorded_by_name)}</p>
+    <div class="table-scroll"><table id="payDetailTable">
+      <tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th>Location</th><th>Amount</th></tr>
+      ${p.items.map(i => `<tr>
+        <td>${esc(i.invoice_number)}</td>
+        <td>${esc(i.cashier_name || '—')}</td>
+        <td>${esc(formatAuditTime(i.created_at))}</td>
+        <td>${esc(i.location_name)}</td>
+        <td>&#8377;${Number(i.amount).toFixed(2)}</td>
+      </tr>`).join('')}
+      <tr><td colspan="4" style="text-align:right"><strong>Total</strong></td><td><strong>&#8377;${Number(p.amount).toFixed(2)}</strong></td></tr>
+    </table></div>
+    ${p.note ? `<p class="hint">Note: ${esc(p.note)}</p>` : ''}
+    <div class="toolbar" style="margin-top:14px">
+      <button class="primary" onclick="printPayment(${p.id})">Print receipt</button>
+      <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>
+    </div>`);
+}
+
+async function printPayment(paymentId) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups to open the receipt in a new tab', 'error'); return; }
+  try {
+    const res = await fetch('/api/payments/' + paymentId + '/print', { headers: { Authorization: 'Bearer ' + state.token } });
+    if (!res.ok) throw new Error('Could not load receipt');
+    const html = await res.text();
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    w.location.href = url;
+    w.focus();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    try { w.close(); } catch (_) {}
+    toast(e.message, 'error');
+  }
+}
+
 async function reports() {
   const canViewDistributorSales = hasAnyRole('super_admin', 'zone_admin');
   const [sales, byBook, stockSum, tf, distributorSales] = await Promise.all([
@@ -1562,12 +1772,14 @@ const AUDIT_ACTION_LABELS = {
   RETURN_DELETE: 'Return deleted',
   DAMAGED_WRITEOFF: 'Damaged stock written off',
   DAMAGED_DELETE: 'Damaged write-off deleted',
+  PAYMENT_IN: 'Cash payment received',
 };
 
 const AUDIT_ENTITY_LABELS = {
   invoices: 'Invoice', books: 'Book', book: 'Book', users: 'User', user: 'User',
   locations: 'Location', location: 'Location', stock: 'Stock', stock_counts: 'Stock count',
   transfers: 'Transfer', returns: 'Return', damaged: 'Damaged stock',
+  cash_submissions: 'Payment in',
 };
 
 function auditActionLabel(action) {
@@ -1579,7 +1791,7 @@ function auditActionClass(action) {
   if (a === 'LOGIN') return 'auth';
   if (a.startsWith('STOCK')) return 'stock';
   if (a.includes('DELETE')) return 'delete';
-  if (a.includes('CREATE') || a.includes('REQUEST') || a.includes('RECEIVE') || a.includes('PROCESS') || a.includes('WRITEOFF') || a.includes('ADJUST')) return 'create';
+  if (a.includes('CREATE') || a.includes('REQUEST') || a.includes('RECEIVE') || a.includes('PROCESS') || a.includes('WRITEOFF') || a.includes('ADJUST') || a === 'PAYMENT_IN') return 'create';
   if (a.includes('UPDATE') || a.includes('APPROVE') || a.includes('DISPATCH') || a.includes('COMPLETE')) return 'update';
   return 'other';
 }

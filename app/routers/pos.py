@@ -227,6 +227,14 @@ def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
         raise HTTPException(403, "Distributors can only access their own bills")
+    handed_over = db.execute(
+        "SELECT 1 FROM cash_submission_items WHERE invoice_id = ?", (invoice_id,)
+    ).fetchone()
+    if handed_over:
+        raise HTTPException(
+            409,
+            "This invoice has already been handed over to the temple. Void that payment-in first.",
+        )
     items = db.execute(
         "SELECT * FROM invoice_items WHERE invoice_id = ?",
         (invoice_id,),

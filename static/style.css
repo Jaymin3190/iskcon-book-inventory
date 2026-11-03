@@ -322,6 +322,11 @@ table tr[hidden] { display: none !important; }
 .mini-stat .lbl { font-size: 11px; color: #8a6d3b; margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
 #modalBox h4 { color: #6b4a1f; margin: 16px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
 .zone-row { cursor: pointer; }
+.pay-total { display: flex; align-items: baseline; gap: 8px; justify-content: flex-end; margin: 10px 0 4px; font-size: 13px; color: #6b5a3a; }
+.pay-total #payTotal { font-size: 21px; font-weight: 700; color: #8a5a1f; }
+.pay-pick { width: 16px; height: 16px; cursor: pointer; }
+#payCartTable th, #payPendingTable th { white-space: nowrap; }
+#payCartTable th:last-child, #payCartTable td:last-child { width: 40px; }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px; margin-bottom: 18px; }
 .stat { background: #fffdf8; border: 1px solid #e3d6ba; border-radius: 10px; padding: 16px; }
 .stat .num { font-size: 24px; font-weight: 700; color: #8a5a1f; }

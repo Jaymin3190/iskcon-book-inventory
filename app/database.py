@@ -160,6 +160,32 @@ CREATE TABLE IF NOT EXISTS invoice_sequences (
     next_number INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS payment_sequences (
+    user_id INTEGER PRIMARY KEY,
+    next_number INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS cash_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_number TEXT NOT NULL UNIQUE,
+    zone_id INTEGER NOT NULL REFERENCES locations(id),
+    submitted_by INTEGER NOT NULL REFERENCES users(id),
+    recorded_by INTEGER NOT NULL REFERENCES users(id),
+    amount NUMERIC NOT NULL DEFAULT 0,
+    invoice_count INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS cash_submission_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id INTEGER NOT NULL REFERENCES cash_submissions(id),
+    invoice_id INTEGER NOT NULL UNIQUE REFERENCES invoices(id),
+    invoice_number TEXT NOT NULL,
+    amount NUMERIC NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),

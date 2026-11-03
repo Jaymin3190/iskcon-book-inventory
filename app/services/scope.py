@@ -48,6 +48,32 @@ def invoice_location_ids(db, user) -> set:
     return zone_location_ids(db, user["zone_id"])
 
 
+def payment_zone_ids(db, user) -> set:
+    """Zones whose cash a user may receive from, or review handovers for.
+
+    A temple admin sits at the temple warehouse, so they receive cash from every
+    zone under that same warehouse, not just their own assigned zone. Zone admins
+    are limited to their own zone so they only ever see their own confirmations.
+    """
+    if user["role"] == "super_admin":
+        rows = db.execute("SELECT id FROM locations WHERE type = 'zone'").fetchall()
+        return {r["id"] for r in rows}
+    if not user["zone_id"]:
+        return {None}
+    if user["role"] == "temple":
+        row = db.execute("SELECT parent_id FROM locations WHERE id = ?", (user["zone_id"],)).fetchone()
+        warehouse_id = row["parent_id"] if row and row["parent_id"] else None
+        ids = {user["zone_id"]}
+        if warehouse_id:
+            rows = db.execute(
+                "SELECT id FROM locations WHERE type = 'zone' AND parent_id = ?",
+                (warehouse_id,),
+            ).fetchall()
+            ids.update(r["id"] for r in rows)
+        return ids
+    return {user["zone_id"]}
+
+
 def zone_of(db, location_id):
     row = db.execute("SELECT parent_id FROM locations WHERE id = ?", (location_id,)).fetchone()
     return row["parent_id"] if row else None

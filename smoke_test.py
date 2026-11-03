@@ -379,6 +379,100 @@ check("super admin can list any zone's invoices",
 code, _ = call("GET", "/api/reports/zones/3/invoices", token=zone_t)
 check("zone admin cannot list another zone's invoices", code == 403)
 
+# --- payment in (cash handover to the temple) ---
+_, zone_me = call("GET", "/api/auth/me", token=zone_t)
+zone_user_id = zone_me["user"]["id"]
+
+code, pay_admins = call("GET", "/api/payments/zone-admins", token=temple_t)
+check("temple admin can list zone admins for payment in", code == 200
+      and any(u["username"] == "leader-temple-zone" for u in pay_admins), pay_admins)
+code, _ = call("GET", "/api/payments/zone-admins", token=zone_t)
+check("zone admin cannot list pay-in zone admins", code == 403)
+
+code, dist_cash = call("POST", "/api/pos/invoices", token=dist_t, body={
+    "customer_name": "Zone collection", "customer_phone": "9999999999",
+    "payment_mode": "cash",
+    "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("distributor cash bill in the zone", code == 200 and dist_cash["total"] == 300.0, dist_cash)
+
+code, pending = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
+pending_numbers = {p["invoice_number"] for p in pending}
+check("pending cash receipts cover the whole zone team", code == 200
+      and pending_numbers == {zone_inv["invoice_number"], zone_inv3["invoice_number"],
+                              dist_cash["invoice_number"]}, pending)
+check("pending receipts show who billed them", any(
+    p["invoice_number"] == dist_cash["invoice_number"] and p["cashier_name"] == "Distributor"
+    for p in pending
+), pending)
+
+zone_team_numbers = [zone_inv["invoice_number"], zone_inv3["invoice_number"],
+                     dist_cash["invoice_number"]]
+code, preview = call("POST", "/api/payments/preview", token=temple_t, body={
+    "user_id": zone_user_id,
+    "receipt_numbers": zone_team_numbers,
+})
+check("payment preview auto-sums the zone team's receipts", code == 200
+      and preview["total"] == 900.0 and preview["count"] == 3 and not preview["errors"], preview)
+check("payment preview labels distributor cash", any(
+    i["cashier_name"] == "Distributor" for i in preview["items"]
+), preview)
+code, preview_bad = call("POST", "/api/payments/preview", token=temple_t, body={
+    "user_id": zone_user_id,
+    "receipt_numbers": [led["invoice_number"], inv["invoice_number"]],
+})
+check("payment preview rejects non-cash and temple-billed receipts", code == 200
+      and preview_bad["count"] == 0 and len(preview_bad["errors"]) == 2, preview_bad)
+code, _ = call("POST", "/api/payments", token=zone_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [zone_inv["invoice_number"]],
+})
+check("zone admin cannot record a payment in", code == 403)
+
+code, payment = call("POST", "/api/payments", token=temple_t, body={
+    "user_id": zone_user_id,
+    "receipt_numbers": zone_team_numbers,
+    "note": "Counted at the temple",
+})
+check("temple admin records a cash handover", code == 200
+      and payment["receipt_number"] == "RCV-templeAdmin-0001"
+      and payment["amount"] == 900.0 and len(payment["items"]) == 3, payment)
+check("payment in includes distributor cash", any(
+    i["cashier_name"] == "Distributor" for i in payment["items"]
+), payment)
+check("payment in names the zone admin and the confirmer",
+      payment.get("zone_admin_name") == "Zone Leader - Temple Zone"
+      and payment.get("recorded_by_name") == "Temple Admin", payment)
+
+code, _ = call("POST", "/api/payments", token=temple_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [zone_inv["invoice_number"]],
+})
+check("a receipt cannot be handed over twice", code == 400)
+code, pending_after = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
+check("handed-over receipts leave the pending list", code == 200 and not pending_after, pending_after)
+
+code, zone_payments = call("GET", "/api/payments", token=zone_t)
+check("zone admin sees the temple confirmation", code == 200
+      and any(p["id"] == payment["id"] for p in zone_payments), zone_payments)
+code, zone_payment = call("GET", f"/api/payments/{payment['id']}", token=zone_t)
+check("zone admin can open the cash receipt", code == 200
+      and len(zone_payment["items"]) == 3, zone_payment)
+code, other_zone_payments = call("GET", "/api/payments", token=other_zone_t)
+check("another zone admin does not see the handover", code == 200 and not other_zone_payments)
+code, _ = call("GET", f"/api/payments/{payment['id']}", token=other_zone_t)
+check("another zone admin cannot open the cash receipt", code == 403)
+code, super_payments = call("GET", "/api/payments", token=super_t)
+check("super admin sees every cash handover", code == 200
+      and any(p["id"] == payment["id"] for p in super_payments), super_payments)
+code, _ = call("DELETE", f"/api/pos/invoices/{zone_inv['invoice_id']}", token=super_t)
+check("a handed-over invoice cannot be deleted", code == 409)
+
+req = urllib.request.Request(f"{BASE}/api/payments/{payment['id']}/print")
+req.add_header("Authorization", "Bearer " + zone_t)
+with urllib.request.urlopen(req) as resp:
+    receipt_body = resp.read().decode()
+check("printable cash receipt HTML", "cash payment-in receipt" in receipt_body.lower())
+check("printed receipt shows the zone admin", "Zone Leader - Temple Zone" in receipt_body)
+
 # --- catalogue CRUD ---
 code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)
 check("book search filters by title", code == 200 and len(found) == 1 and found[0]["id"] == 1)

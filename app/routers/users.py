@@ -196,6 +196,8 @@ def delete_user(user_id: int, db=Depends(get_db), user=Depends(require_roles("su
         ("returns", "processed_by"),
         ("damaged", "created_by"),
         ("stock_counts", "counted_by"),
+        ("cash_submissions", "submitted_by"),
+        ("cash_submissions", "recorded_by"),
     ]
     for table, col in refs:
         r = db.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE {col} = ?", (user_id,)).fetchone()
