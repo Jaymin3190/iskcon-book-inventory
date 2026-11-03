@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from app.database import SCHEMA, _migrate_razorpay
 from app.routers import pos
-from app.routers.reports import sales_report
+from app.routers.reports import sales_report, zone_overview
 from app.routers.razorpay import razorpay_webhook
 from app.services.razorpay import RazorpayError, create_qr_code
 
@@ -52,7 +52,7 @@ class RazorpayIntegrationTests(unittest.TestCase):
         data = pos.InvoiceIn(
             customer_name="Test customer",
             customer_phone="9999999999",
-            payment_mode="upi",
+            payment_mode="razorpay",
             items=[pos.InvoiceItemIn(barcode="1234567890", qty=1)],
         )
         with patch.dict(
@@ -97,7 +97,7 @@ class RazorpayIntegrationTests(unittest.TestCase):
         with patch.dict(os.environ, {"RAZORPAY_WEBHOOK_SECRET": "webhook-secret"}):
             return asyncio.run(razorpay_webhook(request, db=self.db))
 
-    def test_upi_invoice_is_pending_and_reserves_stock(self):
+    def test_razorpay_invoice_is_pending_and_reserves_stock(self):
         result = self.create_pending_invoice()
         invoice = self.db.execute(
             "SELECT * FROM invoices WHERE id = ?", (result["invoice_id"],)
@@ -106,15 +106,17 @@ class RazorpayIntegrationTests(unittest.TestCase):
             "SELECT qty FROM stock WHERE book_id = 1 AND location_id = 2"
         ).fetchone()["qty"]
         self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["payment_mode"], "razorpay")
         self.assertEqual(result["razorpay_qr_code_id"], "qr_test123")
         self.assertEqual(invoice["razorpay_qr_image_url"], "https://rzp.io/i/test123")
+        self.assertEqual(invoice["payment_mode"], "upi")
         self.assertEqual(stock, 4)
 
-    def test_upi_is_rejected_without_razorpay_credentials(self):
+    def test_razorpay_is_rejected_without_razorpay_credentials(self):
         data = pos.InvoiceIn(
             customer_name="Test customer",
             customer_phone="9999999999",
-            payment_mode="upi",
+            payment_mode="razorpay",
             items=[pos.InvoiceItemIn(barcode="1234567890", qty=1)],
         )
         with patch.dict(
@@ -129,6 +131,73 @@ class RazorpayIntegrationTests(unittest.TestCase):
         self.assertEqual(stock, 5)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0], 0)
 
+    def test_existing_upi_mode_saves_as_paid_without_razorpay(self):
+        data = pos.InvoiceIn(
+            customer_name="Test customer",
+            customer_phone="9999999999",
+            payment_mode="upi",
+            items=[pos.InvoiceItemIn(barcode="1234567890", qty=1)],
+        )
+        with patch.dict(
+            os.environ,
+            {"RAZORPAY_KEY_ID": "", "RAZORPAY_KEY_SECRET": ""},
+        ), patch.object(pos, "create_qr_code") as create_qr:
+            result = pos.create_invoice(data, db=self.db, user=self.user)
+        saved = self.db.execute(
+            "SELECT payment_mode, status, razorpay_qr_code_id FROM invoices WHERE id = ?",
+            (result["invoice_id"],),
+        ).fetchone()
+        self.assertEqual(result["status"], "paid")
+        self.assertEqual(saved["payment_mode"], "upi")
+        self.assertEqual(saved["status"], "paid")
+        self.assertIsNone(saved["razorpay_qr_code_id"])
+        create_qr.assert_not_called()
+
+    def test_existing_upi_mode_is_counted_separately_from_razorpay(self):
+        data = pos.InvoiceIn(
+            customer_name="UPI customer",
+            customer_phone="9999999999",
+            payment_mode="upi",
+            items=[pos.InvoiceItemIn(barcode="1234567890", qty=1)],
+        )
+        result = pos.create_invoice(data, db=self.db, user=self.user)
+        zone = next(
+            row for row in zone_overview(
+                db=self.db, user={"role": "super_admin", "zone_id": None}
+            )
+            if row["id"] == 2
+        )
+        self.assertEqual(result["status"], "paid")
+        self.assertEqual(zone["upi_total"], 150.25)
+        self.assertEqual(zone["razorpay_total"], 0)
+
+    def test_confirmed_razorpay_is_reported_separately_from_upi(self):
+        invoice = self.create_pending_invoice()
+        event = {
+            "event": "qr_code.credited",
+            "payload": {
+                "qr_code": {"entity": {"id": "qr_test123"}},
+                "payment": {
+                    "entity": {
+                        "id": "pay_test123",
+                        "status": "captured",
+                        "amount": 15025,
+                        "currency": "INR",
+                        "method": "upi",
+                    }
+                },
+            },
+        }
+        self.send_webhook(event, "event-report-razorpay")
+        zone = next(
+            row for row in zone_overview(
+                db=self.db, user={"role": "super_admin", "zone_id": None}
+            )
+            if row["id"] == 2
+        )
+        self.assertEqual(zone["upi_total"], 0)
+        self.assertEqual(zone["razorpay_total"], 150.25)
+
     def test_pending_invoice_is_excluded_from_sales_report(self):
         self.create_pending_invoice()
         self.assertEqual(sales_report(db=self.db, user={"role": "super_admin"}), [])
@@ -137,7 +206,7 @@ class RazorpayIntegrationTests(unittest.TestCase):
         data = pos.InvoiceIn(
             customer_name="Test customer",
             customer_phone="9999999999",
-            payment_mode="upi",
+            payment_mode="razorpay",
             items=[pos.InvoiceItemIn(barcode="1234567890", qty=1)],
         )
         with patch.dict(

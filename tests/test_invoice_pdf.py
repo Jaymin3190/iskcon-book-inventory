@@ -13,6 +13,7 @@ class InvoicePdfTests(unittest.TestCase):
             "cashier_name": "Cashier",
             "payment_mode": "cash",
             "payment_ref": None,
+            "razorpay_qr_code_id": None,
             "subtotal": 150.25,
             "discount": 10.25,
             "total": 140,

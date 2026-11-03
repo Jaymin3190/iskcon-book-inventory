@@ -118,7 +118,8 @@ def build_invoice_pdf(invoice, items):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     story.extend([details_table, Spacer(1, 3 * mm), table, Spacer(1, 4 * mm)])
-    payment = str(invoice["payment_mode"] or "").upper()
+    payment_label = "razorpay" if invoice["razorpay_qr_code_id"] else invoice["payment_mode"]
+    payment = str(payment_label or "").upper()
     if invoice["payment_ref"]:
         payment += f" ({invoice['payment_ref']})"
     story.append(Paragraph(f"<b>Payment:</b> {escape(payment)}", styles["BodyText"]))

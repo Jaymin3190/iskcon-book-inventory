@@ -338,7 +338,7 @@ async function dashboard() {
       <h2>Zone overview</h2>
       <p class="hint">Stock and sales for every zone. Select a zone to see its distributors and their bills.</p>
       <table class="zone-table">
-        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Cash</th><th>UPI</th><th></th></tr>
+        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th></th></tr>
         ${zones.map(z => `<tr class="zone-row" onclick="zoneDetails(${z.id})">
           <td><strong>${esc(z.name)}</strong><span class="cart-book-barcode">${esc(z.code)}</span></td>
           <td>${z.stock_units}</td>
@@ -348,8 +348,9 @@ async function dashboard() {
           <td>&#8377;${Number(z.revenue || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.cash_total || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.upi_total || 0).toFixed(2)}</td>
+          <td>&#8377;${Number(z.razorpay_total || 0).toFixed(2)}</td>
           <td><button class="action" onclick="event.stopPropagation(); zoneDetails(${z.id})">View</button></td>
-        </tr>`).join('') || '<tr><td colspan="9" class="hint">No zones found.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="10" class="hint">No zones found.</td></tr>'}
       </table>
     </div>` : '';
   document.getElementById('content').innerHTML = `
@@ -409,19 +410,21 @@ async function zoneDetails(zoneId) {
       ${miniStat('Zone revenue', '&#8377;' + Number(z.revenue || 0).toFixed(2))}
       ${miniStat('Cash', '&#8377;' + Number(z.cash_total || 0).toFixed(2))}
       ${miniStat('UPI', '&#8377;' + Number(z.upi_total || 0).toFixed(2))}
+      ${miniStat('Razorpay', '&#8377;' + Number(z.razorpay_total || 0).toFixed(2))}
       ${miniStat('Bills', z.invoice_count ?? invoices.length)}
       ${miniStat('Books sold', z.books_sold ?? 0)}
       ${miniStat('Stock value', '&#8377;' + Number(z.stock_value || 0).toFixed(0))}
     </div>
     <h4>Distributors</h4>
     <table>
-      <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Revenue</th><th>Last sale</th><th></th></tr>
+      <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th>Revenue</th><th>Last sale</th><th></th></tr>
       ${distributors.map(d => `<tr class="zone-row" onclick="distributorDetails(${d.id}, ${zoneId})">
         <td><strong>${esc(d.name)}</strong><span class="cart-book-barcode">${esc(d.username)}</span></td>
         <td>${d.invoice_count}</td>
         <td>${d.books_sold}</td>
         <td>&#8377;${Number(d.cash_total || 0).toFixed(2)}</td>
         <td>&#8377;${Number(d.upi_total || 0).toFixed(2)}</td>
+        <td>&#8377;${Number(d.razorpay_total || 0).toFixed(2)}</td>
         <td>&#8377;${Number(d.revenue || 0).toFixed(2)}</td>
         <td>${d.last_sale ? esc(formatAuditTime(d.last_sale)) : '&mdash;'}</td>
         <td><button class="action" onclick="event.stopPropagation(); distributorDetails(${d.id}, ${zoneId})">Details</button></td>
@@ -462,6 +465,7 @@ async function distributorDetails(userId, zoneId) {
       ${miniStat('Bills', s.invoice_count)}
       ${miniStat('Cash', '&#8377;' + Number(s.cash_total || 0).toFixed(2))}
       ${miniStat('UPI', '&#8377;' + Number(s.upi_total || 0).toFixed(2))}
+      ${miniStat('Razorpay', '&#8377;' + Number(s.razorpay_total || 0).toFixed(2))}
       ${miniStat('Books sold', s.books_sold)}
       ${miniStat('Discount given', '&#8377;' + Number(s.discount || 0).toFixed(2))}
     </div>
@@ -975,13 +979,21 @@ async function pos() {
         <div class="form-row"><label>Customer name *</label><input id="custName" required></div>
         <div class="form-row"><label>Phone *</label><input id="custPhone" type="tel" required></div>
         <div class="form-row"><label>Payment mode</label>
-          <select id="payMode" onchange="toggleUpiQr()"><option value="cash">Cash</option><option value="upi">UPI</option></select>
+          <select id="payMode" onchange="toggleUpiQr()">
+            <option value="cash">Cash</option>
+            <option value="upi">UPI</option>
+            <option value="razorpay">Razorpay</option>
+          </select>
         </div>
         <div class="form-row"><label>Payment ref (optional)</label><input id="payRef"></div>
         <div class="form-row"><label>Discount (&#8377;)</label><input id="discount" type="number" min="0" value="" oninput="renderCart()"></div>
       </div>
       <div id="upiQrPanel" class="upi-qr-panel" hidden>
-        <p>A fixed-amount Razorpay QR code will be generated after you save the invoice.</p>
+        <p>Scan this UPI QR code to pay. Save the invoice after payment.</p>
+        <img src="/upi-qr.jpeg" alt="ISKCON Jamnagar Books and Gifts UPI payment QR code">
+      </div>
+      <div id="razorpayInfo" class="upi-qr-panel" hidden>
+        <p>A one-time, fixed-amount Razorpay QR code will be generated after you save the invoice. The invoice stays pending until payment is confirmed.</p>
       </div>
       <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
         <div><strong>Total:</strong> <span id="cartTotal">&#8377;0.00</span></div>
@@ -995,7 +1007,9 @@ async function pos() {
 
 function toggleUpiQr() {
   const panel = document.getElementById('upiQrPanel');
+  const razorpayInfo = document.getElementById('razorpayInfo');
   if (panel) panel.hidden = document.getElementById('payMode').value !== 'upi';
+  if (razorpayInfo) razorpayInfo.hidden = document.getElementById('payMode').value !== 'razorpay';
 }
 
 function addToCart(b) {
@@ -1464,7 +1478,7 @@ async function checkout() {
     return;
   }
   state.cart = [];
-  if (payMode === 'upi') {
+  if (payMode === 'razorpay') {
     state.pendingPayment = {
       invoiceId: res.invoice_id,
       invoiceNumber: res.invoice_number,
@@ -1476,7 +1490,7 @@ async function checkout() {
     toast('Invoice saved; waiting for Razorpay payment confirmation', 'success');
     return;
   }
-  showSavedInvoice(res, `Payment: CASH${payRef ? ` (${payRef})` : ''}`);
+  showSavedInvoice(res, `Payment: ${payMode.toUpperCase()}${payRef ? ` (${payRef})` : ''}`);
   toast('Invoice saved: ' + res.invoice_number, 'success');
 }
 
@@ -1641,7 +1655,7 @@ async function invoiceList() {
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Actions</th></tr>
       ${rows.map(i => `<tr>
         <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
-        <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td>
+        <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td>
         <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="9" class="hint">No invoices yet.</td></tr>'}
     </table>`);

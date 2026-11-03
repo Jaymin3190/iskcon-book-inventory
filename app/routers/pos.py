@@ -24,7 +24,7 @@ from ..services.timezone import format_ist_date
 
 router = APIRouter(prefix="/api/pos", tags=["pos"])
 
-PAYMENT_MODES = ("cash", "upi")
+PAYMENT_MODES = ("cash", "upi", "razorpay")
 logger = logging.getLogger(__name__)
 
 
@@ -77,8 +77,8 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(400, "Cart is empty")
     if data.payment_mode not in PAYMENT_MODES:
         raise HTTPException(400, f"Invalid payment mode. Valid: {', '.join(PAYMENT_MODES)}")
-    if data.payment_mode == "upi" and not razorpay_is_configured():
-        raise HTTPException(503, "Razorpay is not configured for UPI payments")
+    if data.payment_mode == "razorpay" and not razorpay_is_configured():
+        raise HTTPException(503, "Razorpay is not configured")
     customer_name = (data.customer_name or "").strip()
     customer_phone = (data.customer_phone or "").strip()
     if not customer_name:
@@ -120,19 +120,20 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     subtotal = sum(b["price"] * q for b, q in resolved)
     discount = min(data.discount, subtotal)
     total = round(subtotal - discount, 2)
-    if data.payment_mode == "upi" and total <= 0:
-        raise HTTPException(400, "UPI payments must have a positive total")
+    if data.payment_mode == "razorpay" and total <= 0:
+        raise HTTPException(400, "Razorpay payments must have a positive total")
 
     qr_code = None
     try:
         num = next_invoice_number(db, user)
-        status = "pending" if data.payment_mode == "upi" else "paid"
+        status = "pending" if data.payment_mode == "razorpay" else "paid"
+        stored_payment_mode = "upi" if data.payment_mode == "razorpay" else data.payment_mode
         cur = db.execute(
             """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone,
                                      payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)
                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (num, loc_id, customer_name, customer_phone,
-             data.payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"]),
+             stored_payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"]),
         )
         iid = cur.lastrowid
         for book, q in resolved:
@@ -144,7 +145,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
                 db, book["id"], loc_id, -q, "SALE_OUT", "invoices", iid, user["id"], num,
                 commit=False,
             )
-        if data.payment_mode == "upi":
+        if data.payment_mode == "razorpay":
             qr_code = create_qr_code(num, total)
             db.execute(
                 """UPDATE invoices
@@ -165,7 +166,8 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
                 logger.error("Could not close orphan Razorpay QR %s: %s", qr_code["id"], error)
         raise
 
-    log_audit(db, user["id"], "INVOICE_CREATE", "invoices", iid, f"{num} total {total} {data.payment_mode} {status}", user["username"])
+    payment_label = "razorpay" if data.payment_mode == "razorpay" else data.payment_mode
+    log_audit(db, user["id"], "INVOICE_CREATE", "invoices", iid, f"{num} total {total} {payment_label} {status}", user["username"])
     result = {
         "invoice_id": iid,
         "invoice_number": num,
@@ -173,6 +175,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         "subtotal": subtotal,
         "discount": discount,
         "status": status,
+        "payment_mode": payment_label,
     }
     if qr_code:
         result.update(
@@ -263,7 +266,8 @@ def invoice_html(inv, items):
     invoice_number = escape(str(inv["invoice_number"]))
     date = invoice_date_ist(inv["created_at"])
     payment_ref = escape(str(inv["payment_ref"] or ""))
-    payment = escape(str(inv["payment_mode"] or "").upper())
+    payment_label = "razorpay" if inv["razorpay_qr_code_id"] else inv["payment_mode"]
+    payment = escape(str(payment_label or "").upper())
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Invoice {inv['invoice_number']}</title>
     <style>
       * {{ box-sizing: border-box; }}

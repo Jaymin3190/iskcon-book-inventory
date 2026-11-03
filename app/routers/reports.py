@@ -59,7 +59,10 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
     sql = """SELECT i.created_at AS sold_at, i.invoice_number,
                     u.name AS distributor_name, u.username AS distributor_username,
                     l.name AS location_name, b.title AS book_title, b.barcode,
-                    ii.qty, i.payment_mode, ii.line_total AS amount
+                    ii.qty,
+                    CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
+                         ELSE i.payment_mode END AS payment_mode,
+                    ii.line_total AS amount
              FROM invoices i
              JOIN users u ON u.id = i.cashier_id AND u.role = 'distributor'
              JOIN locations l ON l.id = i.location_id
@@ -107,7 +110,8 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                           COUNT(*) AS invoice_count,
                           COALESCE(SUM(i.total),0) AS revenue,
                           COALESCE(SUM(CASE WHEN i.payment_mode = 'cash' THEN i.total ELSE 0 END),0) AS cash_total,
-                          COALESCE(SUM(CASE WHEN i.payment_mode = 'upi' THEN i.total ELSE 0 END),0) AS upi_total
+                          COALESCE(SUM(CASE WHEN i.payment_mode = 'upi' AND i.razorpay_qr_code_id IS NULL THEN i.total ELSE 0 END),0) AS upi_total,
+                          COALESCE(SUM(CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN i.total ELSE 0 END),0) AS razorpay_total
                      FROM invoices i JOIN tree t ON t.id = i.location_id
                     WHERE i.status = 'paid'
                     GROUP BY t.root_id
@@ -132,6 +136,7 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                     COALESCE(ia.revenue,0) AS revenue,
                     COALESCE(ia.cash_total,0) AS cash_total,
                     COALESCE(ia.upi_total,0) AS upi_total,
+                    COALESCE(ia.razorpay_total,0) AS razorpay_total,
                     COALESCE(sa.books_sold,0) AS books_sold
              FROM locations l
              LEFT JOIN invoice_agg ia ON ia.root_id = l.id
@@ -150,7 +155,9 @@ def zone_invoices(zone_id: int, db=Depends(get_db), user=Depends(require_roles("
         raise HTTPException(404, "Zone not found")
     ids = zone_location_ids(db, zone_id)
     sql = """SELECT i.id, i.invoice_number, i.created_at, i.customer_name, i.customer_phone,
-                    i.payment_mode, i.payment_ref, i.status, i.total,
+                    CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
+                         ELSE i.payment_mode END AS payment_mode,
+                    i.payment_ref, i.status, i.total,
                     l.name AS location_name,
                     u.name AS cashier_name, u.username AS cashier_username,
                     (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
@@ -184,7 +191,11 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
                        WHERE i.cashier_id = u.id AND i.payment_mode = 'cash' AND i.status = 'paid') AS cash_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE i.cashier_id = u.id AND i.payment_mode = 'upi' AND i.status = 'paid') AS upi_total,
+                       WHERE i.cashier_id = u.id AND i.payment_mode = 'upi'
+                         AND i.razorpay_qr_code_id IS NULL AND i.status = 'paid') AS upi_total,
+                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i
+                       WHERE i.cashier_id = u.id AND i.razorpay_qr_code_id IS NOT NULL
+                         AND i.status = 'paid') AS razorpay_total,
                      (SELECT COALESCE(SUM(ii.qty),0)
                         FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
                        WHERE i.cashier_id = u.id AND i.status = 'paid') AS books_sold,
@@ -218,7 +229,8 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
                   COALESCE(SUM(subtotal),0) AS subtotal,
                   COALESCE(SUM(discount),0) AS discount,
                   COALESCE(SUM(CASE WHEN payment_mode = 'cash' THEN total ELSE 0 END),0) AS cash_total,
-                  COALESCE(SUM(CASE WHEN payment_mode = 'upi' THEN total ELSE 0 END),0) AS upi_total,
+                  COALESCE(SUM(CASE WHEN payment_mode = 'upi' AND razorpay_qr_code_id IS NULL THEN total ELSE 0 END),0) AS upi_total,
+                  COALESCE(SUM(CASE WHEN razorpay_qr_code_id IS NOT NULL THEN total ELSE 0 END),0) AS razorpay_total,
                   COALESCE((SELECT SUM(ii.qty) FROM invoice_items ii
                               JOIN invoices i2 ON i2.id = ii.invoice_id
                              WHERE i2.cashier_id = ? AND i2.status = 'paid'),0) AS books_sold,
@@ -229,7 +241,9 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
 
     invoices = db.execute(
         """SELECT i.id, i.invoice_number, i.created_at, i.customer_name, i.customer_phone,
-                  i.payment_mode, i.payment_ref, i.status, i.subtotal, i.discount, i.total,
+                  CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
+                       ELSE i.payment_mode END AS payment_mode,
+                  i.payment_ref, i.status, i.subtotal, i.discount, i.total,
                   l.name AS location_name,
                   (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS line_count,
                   (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
