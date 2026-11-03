@@ -399,7 +399,7 @@ async function zoneDetails(zoneId) {
       <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
       <td>${i.books_qty}</td>
       <td>&#8377;${Number(i.total).toFixed(2)}</td>
-      <td><button class="action" onclick="printInvoice(${i.id})">Print</button></td>
+      <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'zone', ${zoneId})">Delete</button>` : ''}</td>
     </tr>`).join('') || '<tr><td colspan="8" class="hint">No invoices in this zone yet.</td></tr>';
   openModal(`<h3>${esc(z.name || 'Zone')} &mdash; details</h3>
     <p class="hint">${esc(z.code || '')} &middot; ${z.stock_units ?? 0} stock units &middot; ${z.distributor_count ?? distributors.length} active distributor(s)</p>
@@ -451,7 +451,7 @@ async function distributorDetails(userId, zoneId) {
       <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
       <td>${i.books_qty}</td>
       <td>&#8377;${Number(i.total).toFixed(2)}</td>
-      <td><button class="action" onclick="printInvoice(${i.id})">Print</button></td>
+      <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'dist', ${userId}, ${zoneId})">Delete</button>` : ''}</td>
     </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>';
   openModal(`<h3>${esc(d.name)}</h3>
     <p class="hint">@${esc(d.username)} &middot; ${esc(d.zone_name || '—')} &middot; ${d.is_active ? 'Active' : 'Inactive'} &middot; Joined ${esc(formatAuditTime(d.created_at))}</p>
@@ -1480,20 +1480,30 @@ async function invoiceList() {
     <table>
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Total</th><th>Actions</th></tr>
       ${rows.map(i => `<tr>
-        <td>${esc(i.invoice_number)}</td><td>${esc(i.created_at)}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
+        <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.payment_mode.toUpperCase())}</td><td>&#8377;${Number(i.total).toFixed(2)}</td>
         <td><button class="action" onclick="printInvoice(${i.id})">Print</button>${canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="8" class="hint">No invoices yet.</td></tr>'}
     </table>`);
 }
 
-async function invoiceDelete(invoiceId) {
+async function invoiceDelete(invoiceId, view, ...args) {
   if (!confirm(`Delete invoice #${invoiceId}? Stock will be returned to the location.`)) return;
   try {
     await api('/api/pos/invoices/' + invoiceId, { method: 'DELETE' });
-    toast('Invoice deleted and stock restored', 'success');
-    invoiceList();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) {
+    toast(e.message, 'error');
+    return;
+  }
+  toast('Invoice deleted and stock restored', 'success');
+  try {
+    if (view === 'zone' || view === 'dist') await dashboard();
+    if (view === 'zone') await zoneDetails(args[0]);
+    else if (view === 'dist') await distributorDetails(args[0], args[1]);
+    else await invoiceList();
+  } catch (e) {
+    toast(`Invoice deleted and stock restored, but the list could not be refreshed: ${e.message}`, 'error');
+  }
 }
 
 /* ---- payment in (cash handover to the temple) ---- */
@@ -1804,9 +1814,10 @@ function auditEntityLabel(entity) {
 function formatAuditTime(value) {
   if (!value) return '';
   const raw = String(value);
-  const d = new Date(raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z');
+  const timestamp = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw) ? raw : raw.replace(' ', 'T') + 'Z';
+  const d = new Date(timestamp);
   if (isNaN(d)) return raw;
-  return d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 let auditTimer = null;

@@ -1,4 +1,6 @@
 import re
+from datetime import datetime, timedelta, timezone
+from html import escape
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +16,7 @@ from ..services.scope import invoice_location_ids, location_ids
 router = APIRouter(prefix="/api/pos", tags=["pos"])
 
 PAYMENT_MODES = ("cash", "upi")
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def next_invoice_number(db, user) -> str:
@@ -154,40 +157,128 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
     return data
 
 
-def invoice_html(inv, items, org_name="ISKCON"):
-    rows = "".join(
-        f"<tr><td>{it['title']}</td><td>{it['qty']}</td><td class='r'>{it['unit_price']:.2f}</td><td class='r'>{it['line_total']:.2f}</td></tr>"
-        for it in items
-    )
+def invoice_date_ist(value):
+    created_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return created_at.astimezone(IST).strftime("%d/%m/%Y")
+
+
+def invoice_html(inv, items):
+    subtotal_cents = sum(round(float(it["line_total"]) * 100) for it in items)
+    discount_cents = round(float(inv["discount"] or 0) * 100)
+    line_discounts = []
+    allocated_cents = 0
+    for index, item in enumerate(items):
+        line_cents = round(float(item["line_total"]) * 100)
+        if index == len(items) - 1:
+            line_discount = discount_cents - allocated_cents
+        elif subtotal_cents:
+            line_discount = round(discount_cents * line_cents / subtotal_cents)
+            line_discount = min(line_cents, max(0, line_discount))
+        else:
+            line_discount = 0
+        line_discounts.append(line_discount)
+        allocated_cents += line_discount
+
+    def money(cents):
+        return f"₹ {cents / 100:,.2f}"
+
+    rows = []
+    for index, item in enumerate(items):
+        gross_cents = round(float(item["line_total"]) * 100)
+        line_discount = line_discounts[index]
+        net_cents = gross_cents - line_discount
+        discount_percent = (line_discount / gross_cents * 100) if gross_cents else 0
+        unit_cents = round(float(item["unit_price"]) * 100)
+        qty = int(item["qty"])
+        taxable_unit = net_cents / qty if qty else 0
+        rows.append(
+            "<tr>"
+            f"<td>{index + 1}</td>"
+            f"<td class='item-name'>{escape(str(item['title']))}</td>"
+            "<td>49011010</td>"
+            f"<td class='r'>{qty}</td>"
+            f"<td class='r'>{money(unit_cents)}</td>"
+            f"<td class='r'>{money(line_discount)}<span class='percent'>({discount_percent:.3f}%)</span></td>"
+            f"<td class='r'>{money(round(taxable_unit))}</td>"
+            f"<td class='r'>{money(round(taxable_unit))}</td>"
+            f"<td class='r'>{money(net_cents)}</td>"
+            "</tr>"
+        )
+    total_qty = sum(int(item["qty"]) for item in items)
+    rows_html = "".join(rows)
+    customer_name = escape(str(inv["customer_name"] or "-"))
+    customer_phone = escape(str(inv["customer_phone"] or "-"))
+    distributor = escape(str(inv["cashier_name"] or "-"))
+    invoice_number = escape(str(inv["invoice_number"]))
+    date = invoice_date_ist(inv["created_at"])
+    payment_ref = escape(str(inv["payment_ref"] or ""))
+    payment = escape(str(inv["payment_mode"] or "").upper())
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Invoice {inv['invoice_number']}</title>
     <style>
-      body {{ font-family: Arial, sans-serif; margin: 32px; color: #222; }}
-      .head {{ border-bottom: 2px solid #8a5a1f; padding-bottom: 12px; margin-bottom: 20px; }}
-      h1 {{ margin: 0; font-size: 22px; color: #8a5a1f; }}
-      .sub {{ color: #666; font-size: 13px; }}
-      table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
-      th, td {{ border: 1px solid #ddd; padding: 8px; font-size: 13px; text-align: left; }}
-      th {{ background: #f5efe2; }}
+      * {{ box-sizing: border-box; }}
+      body {{ margin: 0; color: #171717; font-family: Arial, sans-serif; font-size: 12px; }}
+      .contact {{ min-height: 76px; padding: 18px 22px 18px 20%; display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 16px; align-items: center; background: #e71936; color: #fff; }}
+      .contact div {{ border-left: 2px solid rgba(255,255,255,.85); padding-left: 10px; }}
+      .brand {{ width: 60%; min-height: 98px; margin-top: -1px; padding: 14px 18px; border-radius: 0 0 70px 0; background: #242a33; color: #fff; }}
+      .brand h1 {{ margin: 0 0 12px; font-size: 23px; font-weight: 400; }}
+      .brand p {{ margin: 4px 0; color: #eee; }}
+      .details {{ display: grid; grid-template-columns: 1.3fr 1fr; gap: 26px; padding: 16px 4px 20px; }}
+      .bill-to h2 {{ margin: 0 0 10px; color: #e71936; font-size: 16px; font-weight: 400; }}
+      .customer {{ margin-bottom: 10px; font-size: 23px; font-weight: 700; }}
+      .bill-to p {{ margin: 6px 0; }}
+      .invoice-info h2 {{ margin: 0 0 14px; font-size: 30px; font-weight: 400; }}
+      .invoice-info p {{ display: grid; grid-template-columns: 180px 1fr; gap: 8px; margin: 7px 0; }}
+      table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+      th, td {{ border: 2px solid #888; padding: 7px 5px; text-align: left; overflow-wrap: anywhere; }}
+      th {{ border-color: #fff; background: #e71936; color: #fff; font-size: 12px; }}
+      td {{ font-size: 11px; }}
       .r {{ text-align: right; }}
-      .total {{ font-size: 15px; font-weight: bold; }}
-      .foot {{ margin-top: 24px; font-size: 12px; color: #666; }}
-      @media print {{ body {{ margin: 8mm; }} }}
+      .item-name {{ font-weight: 700; }}
+      .percent {{ display: block; white-space: nowrap; }}
+      .total td {{ background: #e71936; color: #fff; font-weight: 700; }}
+      @page {{ size: A4 landscape; margin: 8mm; }}
+      @media print {{ body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }} }}
     </style></head><body>
-    <div class="head">
-      <h1>{org_name} Book Distribution</h1>
-      <div class="sub">{inv['location_name']} &mdash; {inv['invoice_number']}</div>
-      <div class="sub">Date: {inv['created_at']} &nbsp;|&nbsp; Cashier: {inv['cashier_name'] or '-'}</div>
+    <div class="contact">
+      <div>☎ &nbsp;9427272312</div>
+      <div>✉ &nbsp;iskconjamnagar@gmail.com</div>
+      <div>⌖ &nbsp;Behind Dhir Toyota Jamnagar-Rajkot Highway</div>
     </div>
-    <div class="sub">Customer: {inv['customer_name'] or '-'} {inv['customer_phone'] or ''}</div>
+    <div class="brand">
+      <h1>ISKCON JAMNAGAR BOOKS &amp; GIFTS</h1>
+      <p>GSTIN: 24AAATI0017P9ZL</p>
+      <p>State: 24-Gujarat</p>
+    </div>
+    <section class="details">
+      <div class="bill-to">
+        <h2>Bill To:</h2>
+        <div class="customer">{customer_name}</div>
+        <p><strong>Contact No.:</strong> &nbsp;{customer_phone}</p>
+        <p><strong>State:</strong> &nbsp;24-Gujarat</p>
+      </div>
+      <div class="invoice-info">
+        <h2>Tax Invoice</h2>
+        <p><strong>Invoice No.:</strong><span>{invoice_number}</span></p>
+        <p><strong>Date:</strong><span>{date}</span></p>
+        <p><strong>Place of Supply:</strong><span>24-Gujarat</span></p>
+        <p><strong>DISTRIBUTOR:</strong><span>{distributor}</span></p>
+      </div>
+    </section>
     <table>
-      <tr><th>Title</th><th>Qty</th><th class="r">Unit Price</th><th class="r">Amount</th></tr>
-      {rows}
-      <tr><td colspan="3" class="r">Subtotal</td><td class="r">{inv['subtotal']:.2f}</td></tr>
-      <tr><td colspan="3" class="r">Discount</td><td class="r">{inv['discount']:.2f}</td></tr>
-      <tr class="total"><td colspan="3" class="r">Total</td><td class="r">{inv['total']:.2f}</td></tr>
+      <colgroup><col style="width:4%"><col style="width:24%"><col style="width:10%"><col style="width:8%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:10%"></colgroup>
+      <thead><tr>
+        <th>#</th><th>Item name</th><th>HSN/SAC</th><th class="r">Quantity</th>
+        <th class="r">Price/ Unit</th><th class="r">Discount</th>
+        <th class="r">Taxable Price/ Unit</th><th class="r">Final Rate</th><th class="r">Amount</th>
+      </tr></thead>
+      <tbody>
+      {rows_html}
+      <tr class="total"><td colspan="3">Total</td><td class="r">{total_qty}</td><td></td><td class="r">{money(discount_cents)}</td><td></td><td></td><td class="r">{money(round(float(inv['total']) * 100))}</td></tr>
+      </tbody>
     </table>
-    <div class="foot">Payment: {inv['payment_mode'].upper()}{' (' + inv['payment_ref'] + ')' if inv['payment_ref'] else ''} &nbsp;|&nbsp; Status: {inv['status'].upper()}</div>
-    <div class="foot">Thank you. &copy; {org_name}</div>
+    <p style="margin-top:12px"><strong>Payment:</strong> {payment}{f" ({payment_ref})" if payment_ref else ""}</p>
     </body></html>"""
 
 
