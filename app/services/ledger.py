@@ -10,7 +10,7 @@ def ensure_stock(db, book_id: int, location_id: int) -> int:
     return row["qty"]
 
 
-def move_stock(db, book_id, location_id, delta, change_type, ref_type, ref_id, user_id, note=None):
+def move_stock(db, book_id, location_id, delta, change_type, ref_type, ref_id, user_id, note=None, commit=True):
     current = ensure_stock(db, book_id, location_id)
     new_qty = current + delta
     if new_qty < 0:
@@ -24,7 +24,8 @@ def move_stock(db, book_id, location_id, delta, change_type, ref_type, ref_id, u
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (book_id, location_id, delta, change_type, ref_type, ref_id, user_id, note),
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def check_available(db, book_id, location_id, qty) -> bool:

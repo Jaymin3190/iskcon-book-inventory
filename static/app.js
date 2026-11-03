@@ -701,8 +701,8 @@ function transferActions(t) {
     h += `<button class="action" onclick="tAction(${t.id},'dispatch')">Dispatch</button>`;
   if (t.status === 'dispatched' && hasAnyRole('super_admin', 'zone_admin'))
     h += `<button class="action" onclick="tAction(${t.id},'receive')">Receive</button>`;
-  if ((t.status === 'requested' || t.status === 'rejected') && hasAnyRole('super_admin', 'zone_admin'))
-    h += `<button class="danger" onclick="tDelete(${t.id})">Delete</button>`;
+  if ((t.status === 'requested' || t.status === 'rejected' || t.status === 'received') && hasAnyRole('super_admin', 'zone_admin'))
+    h += `<button class="danger" onclick="tDelete(${t.id}, ${t.status === 'received'})">Delete</button>`;
   return h || '&mdash;';
 }
 
@@ -712,8 +712,9 @@ async function tAction(id, action) {
   catch (e) { toast(e.message, 'error'); }
 }
 
-async function tDelete(id) {
-  if (!confirm(`Delete transfer request #${id}?`)) return;
+async function tDelete(id, received = false) {
+  const warning = received ? ' This will reverse the stock movement and requires all transferred items to still be at the destination.' : '';
+  if (!confirm(`Delete transfer request #${id}?${warning}`)) return;
   try { await api('/api/stock/transfers/' + id, { method: 'DELETE' }); toast('Transfer deleted', 'success'); refreshCurrent(); }
   catch (e) { toast(e.message, 'error'); }
 }

@@ -233,14 +233,54 @@ def delete_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_r
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
-    if t["status"] not in ("requested", "rejected"):
+    if t["status"] not in ("requested", "rejected", "received"):
         raise HTTPException(409, "Cannot delete: transfer is already in progress or completed")
-    if not can_view(db, user, t["from_location_id"]) and not can_view(db, user, t["to_location_id"]):
+    if t["status"] == "received":
+        if not can_view(db, user, t["from_location_id"]) or not can_view(db, user, t["to_location_id"]):
+            raise HTTPException(403, "Forbidden")
+    elif not can_view(db, user, t["from_location_id"]) and not can_view(db, user, t["to_location_id"]):
         raise HTTPException(403, "Forbidden")
+
+    if t["status"] == "received":
+        items = db.execute(
+            """SELECT book_id, SUM(qty) AS qty
+               FROM transfer_items WHERE transfer_id = ? GROUP BY book_id""",
+            (transfer_id,),
+        ).fetchall()
+        shortages = []
+        for item in items:
+            row = db.execute(
+                "SELECT qty FROM stock WHERE book_id = ? AND location_id = ?",
+                (item["book_id"], t["to_location_id"]),
+            ).fetchone()
+            available = row["qty"] if row else 0
+            if available < item["qty"]:
+                book = db.execute("SELECT title FROM books WHERE id = ?", (item["book_id"],)).fetchone()
+                shortages.append(f"{book['title']} (need {item['qty']}, have {available})")
+        if shortages:
+            raise HTTPException(
+                409,
+                "Cannot delete received transfer: insufficient destination stock to reverse: "
+                + ", ".join(shortages),
+            )
+        for item in items:
+            move_stock(
+                db, item["book_id"], t["to_location_id"], -item["qty"],
+                "TRANSFER_REVERSED_OUT", "transfers", transfer_id, user["id"],
+                "received transfer deleted", commit=False,
+            )
+            move_stock(
+                db, item["book_id"], t["from_location_id"], item["qty"],
+                "TRANSFER_REVERSED_IN", "transfers", transfer_id, user["id"],
+                "received transfer deleted", commit=False,
+            )
     db.execute("DELETE FROM transfer_items WHERE transfer_id = ?", (transfer_id,))
     db.execute("DELETE FROM transfers WHERE id = ?", (transfer_id,))
     db.commit()
-    log_audit(db, user["id"], "TRANSFER_DELETE", "transfers", transfer_id, t["request_number"], user["username"])
+    details = t["request_number"]
+    if t["status"] == "received":
+        details += " (received stock movement reversed)"
+    log_audit(db, user["id"], "TRANSFER_DELETE", "transfers", transfer_id, details, user["username"])
     return {"ok": True}
 
 

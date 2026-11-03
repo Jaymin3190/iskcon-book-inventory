@@ -678,6 +678,38 @@ code, transfer_report = call("GET", "/api/reports/transfers", token=super_t)
 check("transfer report", code == 200 and isinstance(transfer_report, list))
 code, return_report = call("GET", "/api/reports/returns", token=super_t)
 check("returns report", code == 200 and isinstance(return_report, list))
+_, warehouse_before = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
+_, zone_before = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
+code, disposable_transfer = call("POST", "/api/stock/transfers", token=super_t, body={
+    "from_location_id": 1, "to_location_id": 2, "items": [{"book_id": 1, "qty": 1}],
+})
+received_transfer_id = disposable_transfer.get("id")
+code, _ = call("POST", f"/api/stock/transfers/{received_transfer_id}/approve", token=super_t)
+code, _ = call("POST", f"/api/stock/transfers/{received_transfer_id}/dispatch", token=super_t)
+code, _ = call("POST", f"/api/stock/transfers/{received_transfer_id}/receive", token=super_t)
+code, _ = call("DELETE", f"/api/stock/transfers/{received_transfer_id}", token=super_t)
+check("received transfer can be deleted", code == 200)
+_, warehouse_after = call("GET", "/api/stock?location_id=1&book_id=1", token=super_t)
+_, zone_after = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
+check("deleting received transfer reverses stock at both locations",
+      qty(warehouse_after, 1, 1) == qty(warehouse_before, 1, 1)
+      and qty(zone_after, 1, 2) == qty(zone_before, 1, 2))
+_, book_three_zone_before = call("GET", "/api/stock?location_id=2&book_id=3", token=super_t)
+consumed_transfer_qty = qty(book_three_zone_before, 3, 2) + 1
+code, consumed_transfer = call("POST", "/api/stock/transfers", token=super_t, body={
+    "from_location_id": 1, "to_location_id": 2, "items": [{"book_id": 3, "qty": consumed_transfer_qty}],
+})
+consumed_transfer_id = consumed_transfer.get("id")
+call("POST", f"/api/stock/transfers/{consumed_transfer_id}/approve", token=super_t)
+call("POST", f"/api/stock/transfers/{consumed_transfer_id}/dispatch", token=super_t)
+call("POST", f"/api/stock/transfers/{consumed_transfer_id}/receive", token=super_t)
+code, _ = call("POST", "/api/pos/invoices", token=temple_t, body={
+    "customer_name": "Transfer reversal test", "customer_phone": "9999999999", "payment_mode": "cash",
+    "items": [{"barcode": "9780892139479", "qty": consumed_transfer_qty + qty(book_three_zone_before, 3, 2)}],
+})
+check("received transfer stock can be consumed before deletion", code == 200)
+code, _ = call("DELETE", f"/api/stock/transfers/{consumed_transfer_id}", token=super_t)
+check("received transfer deletion is blocked when destination stock is consumed", code == 409)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
