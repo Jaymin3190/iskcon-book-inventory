@@ -127,6 +127,20 @@ _, zs = call("GET", "/api/stock?location_id=2", token=super_t)
 check("zone stock increased after receive", qty(zs, 1, 2) == 5 and qty(zs, 2, 2) == 10
       and qty(zs, 5, 2) == 10 and qty(zs, 7, 2) == 4)
 
+_, zone_only_stock = call("GET", "/api/stock", token=zone_t)
+check("zone admin sees own zone stock only",
+      {row["location_id"] for row in zone_only_stock} == {2} and bool(zone_only_stock), zone_only_stock)
+_, zone_warehouse_stock = call("GET", "/api/stock?location_id=1", token=zone_t)
+check("zone admin cannot view parent warehouse stock", not zone_warehouse_stock)
+code, zone_ledger = call("GET", "/api/stock/ledger", token=zone_t)
+check("zone admin ledger is limited to own zone", code == 200
+      and zone_ledger and all(row["location_id"] == 2 for row in zone_ledger), zone_ledger)
+_, zone_summary = call("GET", "/api/reports/stock-summary", token=zone_t)
+check("zone admin stock summary excludes parent warehouse",
+      {row["location_id"] for row in zone_summary} == {2}, zone_summary)
+code, _ = call("POST", "/api/stock/counts", token=zone_t, body={"location_id": 1})
+check("zone admin cannot start a stock count at the warehouse", code == 403)
+
 code, _ = call("POST", "/api/stock/transfers", token=super_t, body={
     "from_location_id": 2, "to_location_id": 3, "items": [{"book_id": 1, "qty": 1}],
 })
@@ -486,6 +500,61 @@ check("printable cash receipt HTML", "cash payment-in receipt" in receipt_body.l
 check("printed receipt shows the zone admin", "Zone Leader - Temple Zone" in receipt_body)
 check("printed cash receipt labels its date as IST", " IST" in receipt_body)
 
+# --- super admin invoice editing ---
+_, zone_stock_before_edit = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
+zone_qty_before_edit = qty(zone_stock_before_edit, 1, 2)
+code, edit_inv = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Editable Customer", "customer_phone": "9999999999",
+    "payment_mode": "cash", "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("invoice created for editing", code == 200, edit_inv)
+code, _ = call("PATCH", f"/api/pos/invoices/{edit_inv['invoice_id']}", token=zone_t, body={
+    "customer_name": "Zone edit attempt",
+})
+check("zone admin cannot edit invoices", code == 403)
+code, edited_invoice = call("PATCH", f"/api/pos/invoices/{edit_inv['invoice_id']}", token=super_t, body={
+    "customer_name": "Corrected Customer", "customer_phone": "9123456780",
+    "payment_ref": "CASH-EDIT", "discount": 25,
+})
+check("super admin can edit invoice details", code == 200
+      and edited_invoice["customer_name"] == "Corrected Customer"
+      and edited_invoice["customer_phone"] == "9123456780"
+      and edited_invoice["payment_ref"] == "CASH-EDIT"
+      and edited_invoice["discount"] == 25, edited_invoice)
+check("edited invoice total is recalculated", edited_invoice["total"] == round(edited_invoice["subtotal"] - 25, 2), edited_invoice)
+edit_unit_price = float(edited_invoice["items"][0]["unit_price"])
+code, edited_items = call("PATCH", f"/api/pos/invoices/{edit_inv['invoice_id']}", token=super_t, body={
+    "items": [{"barcode": "9780892131343", "qty": 2}],
+})
+check("super admin can edit invoice items", code == 200
+      and edited_items["items"][0]["qty"] == 2
+      and edited_items["subtotal"] == round(edit_unit_price * 2, 2), edited_items)
+_, zone_stock_after_edit = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
+check("increasing an invoice item moves zone stock",
+      qty(zone_stock_after_edit, 1, 2) == zone_qty_before_edit - 2, zone_stock_after_edit)
+code, edited_back = call("PATCH", f"/api/pos/invoices/{edit_inv['invoice_id']}", token=super_t, body={
+    "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("decreasing an invoice item restocks", code == 200 and edited_back["items"][0]["qty"] == 1, edited_back)
+_, zone_stock_restored = call("GET", "/api/stock?location_id=2&book_id=1", token=super_t)
+check("stock restored after invoice item decrease",
+      qty(zone_stock_restored, 1, 2) == zone_qty_before_edit - 1, zone_stock_restored)
+code, _ = call("PATCH", f"/api/pos/invoices/{edit_inv['invoice_id']}", token=super_t, body={
+    "items": [{"barcode": "NO-SUCH-BARCODE", "qty": 1}],
+})
+check("editing with an unknown barcode is rejected", code == 400)
+code, _ = call("PATCH", f"/api/pos/invoices/{edit_inv['invoice_id']}", token=super_t, body={"items": []})
+check("an invoice must keep at least one item", code == 400)
+code, _ = call("PATCH", f"/api/pos/invoices/{zone_inv['invoice_id']}", token=super_t, body={
+    "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("handed-over invoice items cannot be edited", code == 409)
+code, handed_contact = call("PATCH", f"/api/pos/invoices/{zone_inv['invoice_id']}", token=super_t, body={
+    "customer_phone": "9000000001",
+})
+check("handed-over invoice contact can still be corrected", code == 200
+      and handed_contact["customer_phone"] == "9000000001", handed_contact)
+
 # --- catalogue CRUD ---
 code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)
 check("book search filters by title", code == 200 and len(found) == 1 and found[0]["id"] == 1)
@@ -591,8 +660,17 @@ check("completed stock count cannot be deleted", code == 409)
 # --- transfer read, reject, and delete ---
 code, transfer_rows = call("GET", "/api/stock/transfers", token=zone_t)
 check("transfer list", code == 200 and any(t["id"] == tid for t in transfer_rows))
+transfer_row = next((t for t in transfer_rows if t["id"] == tid), {})
+check("transfer list reports line and unit counts",
+      transfer_row.get("item_count") == 4 and transfer_row.get("units") == 29, transfer_row)
 code, transfer_detail = call("GET", f"/api/stock/transfers/{tid}", token=zone_t)
 check("transfer detail includes items", code == 200 and len(transfer_detail["items"]) == 4)
+check("transfer detail names the people at each step",
+      transfer_detail.get("requested_by_name") == "leader-temple-zone"
+      and transfer_detail.get("approved_by_name") == "leader-temple-zone"
+      and transfer_detail.get("dispatched_by_name") == "leader-temple-zone"
+      and transfer_detail.get("received_by_name") == "leader-temple-zone",
+      transfer_detail)
 code, rejected_transfer = call("POST", "/api/stock/transfers", token=zone_t, body={
     "from_location_id": 1, "to_location_id": 2, "items": [{"book_id": 1, "qty": 1}],
 })

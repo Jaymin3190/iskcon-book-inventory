@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], stockRows: [], damagedRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -239,6 +239,13 @@ function showApp() {
 }
 
 function refreshCurrent() { if (state.user) renderCurrentTab().catch(e => toast(e.message, 'error')); }
+
+// Rows in list tabs open their detail view when clicked, like the dashboard zone rows.
+function rowOpen(event, fnName, ...args) {
+  if (event.target.closest('button, a, input, select, label')) return;
+  const fn = window[fnName];
+  if (typeof fn === 'function') fn(...args);
+}
 
 document.getElementById('menuToggle').addEventListener('click', () => {
   setSidebarOpen(!document.getElementById('appView').classList.contains('sidebar-open'));
@@ -613,11 +620,33 @@ async function loadBookRows() {
   const canEdit = canManageBooks();
   const body = document.getElementById('bookRows');
   if (!body) return;
-  body.innerHTML = rows.map(b => `<tr ${b.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}>
+  body.innerHTML = rows.map(b => {
+    const hl = b.barcode === (scanDb.get('last')?.barcode);
+    return `<tr class="clickable-row${hl ? ' hl' : ''}" onclick="rowOpen(event, 'bookRowOpen', ${b.id})">
     <td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${esc(b.isbn || '')}</td><td>${esc(b.language || '')}</td><td>${esc(b.publication || '')}</td><td>&#8377;${b.price}</td>
     ${canEdit ? `<td><button class="action" onclick="bookForm(${b.id})">Edit</button><button class="danger" onclick="bookDelete(${b.id})">Delete</button></td>` : ''}
-  </tr>`).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" class="hint">No books found.</td></tr>`;
+  </tr>`;
+  }).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" class="hint">No books found.</td></tr>`;
   enhanceTableFilters();
+}
+
+function bookRowOpen(bookId) {
+  if (canManageBooks()) bookForm(bookId);
+  else bookDetail(bookId);
+}
+
+function bookDetail(bookId) {
+  const b = (state.books || []).find(x => x.id === bookId);
+  if (!b) return;
+  openModal(`<h3>${esc(b.title)}</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Barcode</th><td>${esc(b.barcode)}</td></tr>
+      <tr><th>ISBN</th><td>${esc(b.isbn || '—')}</td></tr>
+      <tr><th>Language</th><td>${esc(b.language || '—')}</td></tr>
+      <tr><th>Publication</th><td>${esc(b.publication || '—')}</td></tr>
+      <tr><th>Price</th><td>&#8377;${b.price}</td></tr>
+    </table></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
 
 function bookForm(bookId = null) {
@@ -661,9 +690,17 @@ async function bookDelete(bookId) {
 }
 
 let stockLocFilter = '';
+
+function stockVisibleLocations(locs) {
+  if (state.user.role !== 'zone_admin' || !state.user.zone_id) return locs;
+  const ids = locationDescendants(locs, state.user.zone_id);
+  return locs.filter(l => ids.has(l.id));
+}
+
 async function stock() {
-  const locs = await api('/api/locations');
+  const locs = stockVisibleLocations(await api('/api/locations'));
   const rows = await api('/api/stock' + (stockLocFilter ? '?location_id=' + stockLocFilter : ''));
+  state.stockRows = rows;
   const role = state.user.role;
   const adjustmentWarehouse = ['super_admin', 'temple'].includes(role)
     ? locs.find(l => l.type === 'warehouse' && l.parent_id == null)
@@ -684,10 +721,36 @@ async function stock() {
       </div>
       <table class="stock-inventory-table">
         <tr><th>Location</th><th>Title</th><th>Barcode</th><th>Publication</th><th>Qty on hand</th><th>Price</th><th>Value</th>${hasActions ? '<th>Actions</th>' : ''}</tr>
-        ${rows.map(r => `<tr ${r.barcode === (scanDb.get('last')?.barcode) ? 'class="hl"' : ''}><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td>${hasActions ? `<td>${adjustmentWarehouse && r.location_id === adjustmentWarehouse.id ? `<button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button>` : ''}${canViewLedger ? `<button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button>` : ''}</td>` : ''}</tr>`).join('') || `<tr><td colspan="${hasActions ? 8 : 7}" class="hint">No stock rows found.</td></tr>`}
+        ${rows.map(r => {
+          const hl = r.barcode === (scanDb.get('last')?.barcode);
+          return `<tr class="clickable-row${hl ? ' hl' : ''}" onclick="rowOpen(event, 'stockRowOpen', ${r.location_id}, ${r.book_id})"><td>${esc(r.location_name)}</td><td>${esc(r.title)}</td><td>${esc(r.barcode)}</td><td>${esc(r.publication || '')}</td><td><span class="stock-quantity ${r.qty > 0 ? 'available' : 'empty'}">${r.qty}</span></td><td>&#8377;${r.price}</td><td><span class="stock-value-text">&#8377;${(r.qty * r.price).toFixed(2)}</span></td>${hasActions ? `<td>${adjustmentWarehouse && r.location_id === adjustmentWarehouse.id ? `<button class="action" onclick="stockAdjustModal(${r.book_id}, ${r.location_id})">Adjust</button>` : ''}${canViewLedger ? `<button class="action" onclick="showLedger(${r.location_id}, ${r.book_id})">Ledger</button>` : ''}</td>` : ''}</tr>`;
+        }).join('') || `<tr><td colspan="${hasActions ? 8 : 7}" class="hint">No stock rows found.</td></tr>`}
       </table>
     </div>`;
   pageScanStrip(() => refreshCurrent(), 'Scan a barcode to highlight its stock row', true);
+}
+
+function stockRowOpen(locationId, bookId) {
+  if (hasAnyRole('super_admin', 'zone_admin', 'temple')) {
+    showLedger(locationId, bookId);
+    return;
+  }
+  stockDetail(locationId, bookId);
+}
+
+function stockDetail(locationId, bookId) {
+  const r = (state.stockRows || []).find(x => x.location_id === locationId && x.book_id === bookId);
+  if (!r) return;
+  openModal(`<h3>${esc(r.title)}</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Location</th><td>${esc(r.location_name)}</td></tr>
+      <tr><th>Barcode</th><td>${esc(r.barcode)}</td></tr>
+      <tr><th>Publication</th><td>${esc(r.publication || '—')}</td></tr>
+      <tr><th>Qty on hand</th><td>${r.qty}</td></tr>
+      <tr><th>Price</th><td>&#8377;${r.price}</td></tr>
+      <tr><th>Stock value</th><td>&#8377;${(r.qty * r.price).toFixed(2)}</td></tr>
+    </table></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
 
 async function stockAdjustModal(bookId = null, locationId = null) {
@@ -769,7 +832,7 @@ async function showLedger(locationId = null, bookId = null) {
 }
 
 async function stockCountModal() {
-  const locs = await api('/api/locations');
+  const locs = stockVisibleLocations(await api('/api/locations'));
   openModal(`<h3>Start stock count</h3>
     <div class="form-row"><label>Location</label><select id="scLoc">${locs.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select></div>
     <button class="primary" onclick="scCreate()">Create count</button>`);
@@ -807,53 +870,122 @@ async function renderTransfers() {
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar"><button class="primary" onclick="transferForm()">+ Request transfer</button></div>
+      <p class="hint">Select a transfer to see its progress and take the next step.</p>
       <table>
-        <tr><th>Request #</th><th>Requested</th><th>From</th><th>To</th><th>Items</th><th>Status</th><th>Raised by</th><th>Actions</th></tr>
-        ${rows.map(t => `<tr>
-          <td>${esc(t.request_number)}</td><td>${esc(formatAuditTime(t.requested_at))}</td>
-          <td>${esc(t.from_name)}</td><td>${esc(t.to_name)}</td>
-          <td><button class="action" onclick="transferDetail(${t.id})">view</button></td>
+        <tr><th>Request #</th><th>Raised</th><th>Route</th><th>Items</th><th>Status</th><th>Next step</th><th>Raised by</th></tr>
+        ${rows.map(t => `<tr class="clickable-row" onclick="rowOpen(event, 'transferDetail', ${t.id})">
+          <td>${esc(t.request_number)}</td>
+          <td>${esc(formatAuditTime(t.requested_at))}</td>
+          <td>${esc(t.from_name)} &rarr; ${esc(t.to_name)}</td>
+          <td>${t.item_count || 0} line${t.item_count === 1 ? '' : 's'} &middot; ${t.units || 0} units</td>
           <td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td>
+          <td>${esc(transferNextStep(t))}</td>
           <td>${esc(t.requested_by_name || '')}</td>
-          <td>${transferActions(t)}</td>
-        </tr>`).join('')}
+        </tr>`).join('') || '<tr><td colspan="7" class="hint">No transfer requests yet.</td></tr>'}
       </table>
     </div>`;
 }
 
-function transferActions(t) {
-  let h = '';
-  if (t.status === 'requested' && hasAnyRole('super_admin', 'zone_admin'))
-    h += `<button class="action" onclick="tAction(${t.id},'approve')">Approve</button><button class="danger" onclick="tAction(${t.id},'reject')">Reject</button>`;
-  if (t.status === 'approved' && hasAnyRole('super_admin', 'zone_admin'))
-    h += `<button class="action" onclick="tAction(${t.id},'dispatch')">Dispatch</button>`;
-  if (t.status === 'dispatched' && hasAnyRole('super_admin', 'zone_admin'))
-    h += `<button class="action" onclick="tAction(${t.id},'receive')">Receive</button>`;
-  if ((t.status === 'requested' || t.status === 'rejected' || t.status === 'received') && hasAnyRole('super_admin', 'zone_admin'))
-    h += `<button class="danger" onclick="tDelete(${t.id}, ${t.status === 'received'})">Delete</button>`;
-  return h || '&mdash;';
+function transferNextStep(t) {
+  switch (t.status) {
+    case 'requested': return 'Waiting for approval';
+    case 'approved': return 'Ready to dispatch';
+    case 'dispatched': return 'In transit — confirm receipt';
+    case 'received': return 'Completed';
+    case 'rejected': return 'Rejected';
+    default: return t.status || '';
+  }
+}
+
+function transferTimeline(t) {
+  const step = (label, at, by, cls) => `<div class="transfer-step ${cls}">
+    <span class="step-label">${cls.includes('done') ? '✓ ' : ''}${esc(label)}</span>
+    <span class="step-date">${at ? esc(formatAuditTime(at)) + (by ? ' · ' + esc(by) : '') : (cls.includes('current') ? 'Next step' : 'Pending')}</span>
+  </div>`;
+  if (t.status === 'rejected') {
+    return `<div class="transfer-steps">
+      ${step('Requested', t.requested_at, t.requested_by_name, 'done')}
+      <div class="transfer-step rejected"><span class="step-label">Rejected</span><span class="step-date">No stock moved</span></div>
+    </div>`;
+  }
+  const order = ['requested', 'approved', 'dispatched', 'received'];
+  const currentIndex = order.indexOf(t.status);
+  return `<div class="transfer-steps">
+    ${step('Requested', t.requested_at, t.requested_by_name, t.status === 'received' || currentIndex > 0 ? 'done' : 'current')}
+    ${step('Approved', t.approved_at, t.approved_by_name, t.status === 'received' || currentIndex > 1 ? 'done' : currentIndex === 1 ? 'current' : '')}
+    ${step('Dispatched', t.dispatched_at, t.dispatched_by_name, t.status === 'received' || currentIndex > 2 ? 'done' : currentIndex === 2 ? 'current' : '')}
+    ${step('Completed', t.received_at, t.received_by_name, t.status === 'received' ? 'done' : currentIndex === 3 ? 'current' : '')}
+  </div>`;
+}
+
+function transferDetailActions(t) {
+  const canManage = hasAnyRole('super_admin', 'zone_admin');
+  let html = '';
+  if (canManage && t.status === 'requested') {
+    html += `<button class="primary" onclick="tAction(${t.id}, 'approve')">Approve request</button>`;
+    html += `<button class="danger" onclick="tAction(${t.id}, 'reject')">Reject</button>`;
+  }
+  if (canManage && t.status === 'approved') {
+    html += `<button class="primary" onclick="tAction(${t.id}, 'dispatch')">Dispatch stock</button>`;
+  }
+  if (canManage && t.status === 'dispatched') {
+    html += `<button class="primary" onclick="tAction(${t.id}, 'receive')">Complete transfer</button>`;
+  }
+  if (canManage && ['requested', 'rejected', 'received'].includes(t.status)) {
+    html += `<button class="danger" onclick="tDelete(${t.id}, ${t.status === 'received'}, '${esc(t.request_number)}')">Delete request</button>`;
+  }
+  html += `<button class="action" onclick="closeModal()">Close</button>`;
+  return html;
 }
 
 async function tAction(id, action) {
-  if (!confirm(`Confirm: ${action} transfer #${id}?`)) return;
-  try { await api(`/api/stock/transfers/${id}/${action}`, { method: 'POST' }); toast('Transfer ' + action + 'd', 'success'); refreshCurrent(); }
-  catch (e) { toast(e.message, 'error'); }
+  const prompts = {
+    approve: 'Approve this transfer request?',
+    reject: 'Reject this transfer request?',
+    dispatch: 'Dispatch the stock now? Warehouse stock will be reduced.',
+    receive: 'Confirm the destination received all items? This completes the transfer.',
+  };
+  if (!confirm(prompts[action] || `Continue with ${action}?`)) return;
+  const done = { approve: 'approved', reject: 'rejected', dispatch: 'dispatched', receive: 'completed' }[action] || action;
+  try {
+    await api(`/api/stock/transfers/${id}/${action}`, { method: 'POST' });
+    toast('Transfer ' + done, 'success');
+    refreshCurrent();
+    await transferDetail(id);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
-async function tDelete(id, received = false) {
+async function tDelete(id, received = false, requestNumber = '') {
   const warning = received ? ' This will reverse the stock movement and requires all transferred items to still be at the destination.' : '';
-  if (!confirm(`Delete transfer request #${id}?${warning}`)) return;
-  try { await api('/api/stock/transfers/' + id, { method: 'DELETE' }); toast('Transfer deleted', 'success'); refreshCurrent(); }
-  catch (e) { toast(e.message, 'error'); }
+  if (!confirm(`Delete transfer ${requestNumber || '#' + id}?${warning}`)) return;
+  try {
+    await api('/api/stock/transfers/' + id, { method: 'DELETE' });
+    closeModal();
+    toast('Transfer deleted', 'success');
+    refreshCurrent();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function transferDetail(id) {
-  const t = await api('/api/stock/transfers/' + id);
+  let t;
+  try { t = await api('/api/stock/transfers/' + id); }
+  catch (e) { toast(e.message, 'error'); return; }
+  const totalUnits = t.items.reduce((sum, i) => sum + i.qty, 0);
   openModal(`<h3>Transfer ${esc(t.request_number)} — <span class="badge ${esc(t.status)}">${esc(t.status)}</span></h3>
-    <p style="font-size:13px">Raised ${esc(formatAuditTime(t.requested_at))} by ${esc(t.requested_by_name || 'unknown')}<br>From: ${esc(t.from_name)} &rarr; To: ${esc(t.to_name)}<br>${esc(t.note || '')}</p>
-    <table><tr><th>Title</th><th>Barcode</th><th>Qty</th><th>Price</th></tr>
-      ${t.items.map(i => `<tr><td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>${i.qty}</td><td>&#8377;${i.price}</td></tr>`).join('')}
-    </table>`);
+    <p class="hint">${esc(transferNextStep(t))}</p>
+    ${transferTimeline(t)}
+    <div class="table-scroll"><table>
+      <tr><th>Raised</th><td>${esc(formatAuditTime(t.requested_at))} by ${esc(t.requested_by_name || 'unknown')}</td></tr>
+      <tr><th>Route</th><td>${esc(t.from_name)} &rarr; ${esc(t.to_name)}</td></tr>
+      <tr><th>Items</th><td>${t.items.length} line${t.items.length === 1 ? '' : 's'} &middot; ${totalUnits} units</td></tr>
+      ${t.note ? `<tr><th>Note</th><td>${esc(t.note)}</td></tr>` : ''}
+    </table></div>
+    <h4>Books</h4>
+    <div class="table-scroll"><table>
+      <tr><th>Title</th><th>Barcode</th><th>Qty</th><th>Price</th></tr>
+      ${t.items.map(i => `<tr><td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>${i.qty}</td><td>&#8377;${i.price}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No items.</td></tr>'}
+    </table></div>
+    <div class="toolbar" style="margin-top:16px">${transferDetailActions(t)}</div>`);
 }
 
 let trItems = [];
@@ -919,6 +1051,7 @@ async function trSubmit() {
 
 async function renderReturns() {
   const [rows, damaged] = await Promise.all([api('/api/stock/returns'), api('/api/stock/damaged')]);
+  state.damagedRows = damaged;
   const canProc = hasAnyRole('super_admin', 'zone_admin');
   document.getElementById('content').innerHTML = `
     <div class="card">
@@ -929,7 +1062,7 @@ async function renderReturns() {
       <h2>Returns</h2>
       <table>
         <tr><th>Return #</th><th>Location</th><th>Reason</th><th>Units</th><th>Status</th><th>Actions</th></tr>
-        ${rows.map(r => `<tr>
+        ${rows.map(r => `<tr class="clickable-row" onclick="rowOpen(event, 'returnDetail', ${r.id})">
           <td>${esc(r.return_number)}</td><td>${esc(r.location_name)}</td><td>${esc(r.reason || '')}</td><td>${r.units}</td>
           <td><span class="badge ${esc(r.status)}">${esc(r.status)}</span></td>
           <td>${(r.status === 'recorded' && canProc) ? `<button class="action" onclick="processReturn(${r.id})">Process</button><button class="danger" onclick="rDelete(${r.id})">Delete</button>` : '&mdash;'}</td>
@@ -938,9 +1071,41 @@ async function renderReturns() {
     </div>
     <div class="card"><h2>Damaged write-offs</h2>
       <table><tr><th>Time</th><th>Location</th><th>Title</th><th>Qty</th><th>Reason</th><th>Actions</th></tr>
-        ${damaged.map(d => `<tr><td>${esc(formatAuditTime(d.created_at))}</td><td>${esc(d.location_code)}</td><td>${esc(d.title)}</td><td>${d.qty}</td><td>${esc(d.reason_code)}</td><td>${canProc ? `<button class="danger" onclick="dDelete(${d.id})">Undo</button>` : '&mdash;'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No damaged write-offs.</td></tr>'}
+        ${damaged.map(d => `<tr class="clickable-row" onclick="rowOpen(event, 'damagedDetail', ${d.id})"><td>${esc(formatAuditTime(d.created_at))}</td><td>${esc(d.location_code)}</td><td>${esc(d.title)}</td><td>${d.qty}</td><td>${esc(d.reason_code)}</td><td>${canProc ? `<button class="danger" onclick="dDelete(${d.id})">Undo</button>` : '&mdash;'}</td></tr>`).join('') || '<tr><td colspan="6" class="hint">No damaged write-offs.</td></tr>'}
       </table>
     </div>`;
+}
+
+async function returnDetail(returnId) {
+  let r;
+  try { r = await api('/api/stock/returns/' + returnId); }
+  catch (e) { toast(e.message, 'error'); return; }
+  openModal(`<h3>Return ${esc(r.return_number)} — <span class="badge ${esc(r.status)}">${esc(r.status)}</span></h3>
+    <p class="hint">Recorded ${esc(formatAuditTime(r.created_at))}${r.created_by_name ? ' by ' + esc(r.created_by_name) : ''}${r.processed_at ? ' · Processed ' + esc(formatAuditTime(r.processed_at)) + (r.processed_by_name ? ' by ' + esc(r.processed_by_name) : '') : ''}</p>
+    <div class="table-scroll"><table>
+      <tr><th>Location</th><td>${esc(r.location_name)}</td></tr>
+      <tr><th>Credited to</th><td>${esc(r.credit_location_name || '—')}</td></tr>
+      <tr><th>Reason</th><td>${esc(r.reason || '—')}</td></tr>
+    </table></div>
+    <h4>Books</h4>
+    <div class="table-scroll"><table>
+      <tr><th>Title</th><th>Barcode</th><th>Qty</th><th>Price</th></tr>
+      ${r.items.map(i => `<tr><td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>${i.qty}</td><td>&#8377;${i.price}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No items.</td></tr>'}
+    </table></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
+}
+
+function damagedDetail(damagedId) {
+  const d = (state.damagedRows || []).find(x => x.id === damagedId);
+  if (!d) return;
+  openModal(`<h3>${esc(d.title)}</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Recorded</th><td>${esc(formatAuditTime(d.created_at))}</td></tr>
+      <tr><th>Location</th><td>${esc(d.location_code)}</td></tr>
+      <tr><th>Qty</th><td>${d.qty}</td></tr>
+      <tr><th>Reason</th><td>${esc(d.reason_code)}</td></tr>
+    </table></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
 
 let rtItems = [];
@@ -1626,7 +1791,7 @@ async function checkout() {
 function showSavedInvoice(invoice, detail) {
   openModal(`<h3>Invoice saved</h3>
     <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
-    <p class="hint">${esc(detail)}. Share sends the invoice PDF through the share sheet where the browser supports attachments, otherwise it opens the customer's WhatsApp chat with the bill details. Save downloads the PDF.</p>
+    <p class="hint">${esc(detail)}. Share opens the customer's WhatsApp chat with the bill details and saves the invoice PDF so you can attach it there. Save downloads the PDF again.</p>
     <div class="toolbar">
       <button class="primary" onclick="shareSavedInvoice(${invoice.invoice_id})">Share</button>
       <button id="saveInvoiceButton" class="action" disabled onclick="downloadInvoicePdf(${invoice.invoice_id})">Save</button>
@@ -1649,26 +1814,20 @@ function finishSavedInvoice() {
 }
 
 function shareSavedInvoice(invoiceId) {
-  const cached = state.invoicePdf?.invoiceId === invoiceId ? state.invoicePdf.file : null;
-  if (cached && typeof File !== 'undefined' && navigator.share && navigator.canShare) {
-    const file = new File([cached], `invoice-${invoiceId}.pdf`, { type: 'application/pdf' });
-    if (navigator.canShare({ files: [file] })) {
-      const meta = state.lastInvoice;
-      navigator.share({
-        files: [file],
-        title: meta ? `Invoice ${meta.invoiceNumber}` : `Invoice ${invoiceId}`,
-        text: meta ? whatsappInvoiceMessage(meta) : 'Thank you for your purchase. Please find the invoice attached.',
-      }).then(() => toast('Invoice shared', 'success'))
-        .catch(e => { if (e.name !== 'AbortError') toast(e.message, 'error'); });
-      return;
-    }
-  }
-  if (whatsappPhoneNumber(state.lastInvoice?.customerPhone)) {
-    shareInvoiceWhatsApp();
-    toast('Attachments need the share sheet; Save downloads the PDF so you can attach it.', 'info');
-    return;
-  }
-  shareInvoicePdf(invoiceId);
+  // Open the customer's chat directly and download the PDF so it can be
+  // attached. WhatsApp links cannot attach files themselves.
+  shareInvoiceWhatsApp(invoiceId);
+}
+
+function invoiceShareMeta(inv) {
+  return {
+    invoiceId: inv.invoice_id ?? inv.id,
+    invoiceNumber: inv.invoice_number,
+    customerName: inv.customer_name || 'Customer',
+    customerPhone: inv.customer_phone,
+    total: Number(inv.total),
+    items: (inv.items || []).map(i => ({ title: i.title, qty: i.qty })),
+  };
 }
 
 function whatsappInvoiceMessage(meta) {
@@ -1685,16 +1844,41 @@ function whatsappInvoiceMessage(meta) {
   return lines.join('\n');
 }
 
-function shareInvoiceWhatsApp() {
-  const meta = state.lastInvoice;
-  if (!meta) { toast('Invoice details are not available', 'error'); return; }
-  const number = whatsappPhoneNumber(meta.customerPhone);
-  if (!number) { toast('This bill has no valid WhatsApp phone number', 'error'); return; }
-  const url = `https://wa.me/${number}?text=${encodeURIComponent(whatsappInvoiceMessage(meta))}`;
-  const win = window.open(url, '_blank');
-  if (!win) { toast('Allow pop-ups to open WhatsApp', 'error'); return; }
-  try { win.opener = null; win.focus(); } catch (_) {}
-  toast('Opening WhatsApp for ' + meta.customerName, 'success');
+async function shareInvoiceWhatsApp(invoiceOrId) {
+  // Reserve a tab inside the click gesture so it is not blocked after the
+  // invoice lookup finishes.
+  const popup = window.open('', '_blank');
+  try {
+    let meta = invoiceOrId && typeof invoiceOrId === 'object' ? invoiceOrId : null;
+    if (!meta) {
+      const invoiceId = invoiceOrId ?? state.lastInvoice?.invoiceId;
+      if (!invoiceId) throw new Error('Invoice details are not available');
+      meta = state.lastInvoice?.invoiceId === invoiceId ? state.lastInvoice : null;
+      if (!meta) meta = invoiceShareMeta(await api('/api/pos/invoices/' + invoiceId));
+    }
+    const number = whatsappPhoneNumber(meta.customerPhone);
+    if (!number) throw new Error('This bill has no valid WhatsApp phone number');
+    const url = `https://wa.me/${number}?text=${encodeURIComponent(whatsappInvoiceMessage(meta))}`;
+    if (popup) {
+      popup.location.href = url;
+      try { popup.opener = null; popup.focus(); } catch (_) {}
+    } else {
+      const win = window.open(url, '_blank');
+      if (!win) throw new Error('Allow pop-ups to open WhatsApp');
+      try { win.opener = null; win.focus(); } catch (_) {}
+    }
+    toast('Opening WhatsApp for ' + meta.customerName, 'success');
+    try {
+      const blob = await fetchInvoicePdf(meta.invoiceId);
+      savePdfFile(blob, meta.invoiceId);
+      toast('Invoice PDF saved. Attach it in the WhatsApp chat.', 'info');
+    } catch (_) {
+      toast('Opening WhatsApp, but the PDF could not be prepared. Use Save to download it.', 'error');
+    }
+  } catch (e) {
+    if (popup) { try { popup.close(); } catch (_) {} }
+    toast(e.message, 'error');
+  }
 }
 
 async function fetchInvoicePdf(invoiceId) {
@@ -1849,12 +2033,192 @@ async function invoiceList() {
     <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only.</p>
     <table>
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Actions</th></tr>
-      ${rows.map(i => `<tr>
+      ${rows.map(i => `<tr class="clickable-row" onclick="rowOpen(event, 'invoiceDetail', ${i.id})">
         <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td>
-        <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
+        <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${i.status === 'paid' && state.user.role === 'super_admin' ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="9" class="hint">No invoices yet.</td></tr>'}
     </table>`);
+}
+
+async function invoiceDetail(invoiceId) {
+  let inv;
+  try { inv = await api('/api/pos/invoices/' + invoiceId); }
+  catch (e) { toast(e.message, 'error'); return; }
+  const paid = inv.status === 'paid';
+  openModal(`<h3>Invoice ${esc(inv.invoice_number)}</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Date</th><td>${esc(formatAuditTime(inv.created_at))}</td></tr>
+      <tr><th>Customer</th><td>${esc(inv.customer_name || '—')}${inv.customer_phone ? ' · ' + esc(inv.customer_phone) : ''}</td></tr>
+      <tr><th>Billed by</th><td>${esc(inv.cashier_name || '—')} · ${esc(inv.location_name)}</td></tr>
+      <tr><th>Payment</th><td>${esc(inv.payment_mode.toUpperCase())}${inv.payment_ref ? ' · ' + esc(inv.payment_ref) : ''}</td></tr>
+      <tr><th>Status</th><td><span class="badge ${esc(inv.status)}">${esc(inv.status)}</span></td></tr>
+      ${inv.handed_over ? '<tr><th>Cash handover</th><td>Included in a payment-in receipt</td></tr>' : ''}
+    </table></div>
+    <h4>Items</h4>
+    <div class="table-scroll"><table>
+      <tr><th>Title</th><th>Barcode</th><th>Qty</th><th>Price</th><th>Total</th></tr>
+      ${inv.items.map(i => `<tr><td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>${i.qty}</td><td>&#8377;${Number(i.unit_price).toFixed(2)}</td><td>&#8377;${Number(i.line_total).toFixed(2)}</td></tr>`).join('')}
+    </table></div>
+    <p><strong>Total:</strong> &#8377;${Number(inv.total).toFixed(2)}</p>
+    <div class="toolbar" style="margin-top:14px">
+      ${paid ? `<button class="action" onclick="downloadInvoicePdf(${inv.id})">PDF</button>` : ''}
+      ${paid ? `<button class="action" onclick="shareInvoiceWhatsApp(${inv.id})">Share</button>` : ''}
+      ${paid && state.user.role === 'super_admin' ? `<button class="action" onclick="invoiceEdit(${inv.id})">Edit</button>` : ''}
+      ${inv.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${inv.id})">Check payment</button>` : ''}
+      <button class="action" onclick="invoiceList()">Back</button>
+    </div>`);
+}
+
+let invoiceEditState = null;
+
+async function invoiceEdit(invoiceId) {
+  try {
+    const [inv, books] = await Promise.all([api('/api/pos/invoices/' + invoiceId), api('/api/books')]);
+    if (inv.status !== 'paid') { toast('Only paid invoices can be edited', 'error'); return; }
+    invoiceEditState = {
+      invoice: inv,
+      books,
+      amountLocked: Boolean(inv.razorpay_qr_code_id || inv.handed_over),
+      items: (inv.items || []).map(i => ({
+        barcode: i.barcode, title: i.title, qty: Number(i.qty), price: Number(i.unit_price),
+      })),
+      form: {
+        name: inv.customer_name || '',
+        phone: inv.customer_phone || '',
+        mode: inv.razorpay_qr_code_id ? 'razorpay' : inv.payment_mode,
+        ref: inv.payment_ref || '',
+        discount: Number(inv.discount || 0),
+      },
+    };
+    renderInvoiceEdit();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function invoiceEditCapture() {
+  if (!invoiceEditState) return;
+  document.querySelectorAll('#modalBox input[data-inv-item]').forEach(input => {
+    const idx = Number(input.dataset.invItem);
+    if (invoiceEditState.items[idx]) {
+      invoiceEditState.items[idx].qty = Math.max(0, Number(input.value) || 0);
+    }
+  });
+  const get = id => document.getElementById(id);
+  invoiceEditState.form = {
+    name: get('invEditName')?.value ?? invoiceEditState.form.name,
+    phone: get('invEditPhone')?.value ?? invoiceEditState.form.phone,
+    mode: get('invEditMode')?.value ?? invoiceEditState.form.mode,
+    ref: get('invEditRef')?.value ?? invoiceEditState.form.ref,
+    discount: get('invEditDiscount')?.value ?? invoiceEditState.form.discount,
+  };
+}
+
+function renderInvoiceEdit() {
+  const s = invoiceEditState;
+  if (!s) return;
+  const inv = s.invoice;
+  const f = s.form;
+  const locked = s.amountLocked;
+  const modeOptions = locked
+    ? `<option value="${esc(f.mode)}" selected>${esc(String(f.mode || '').toUpperCase())}</option>`
+    : ['cash', 'upi', 'card', 'ledger'].map(m =>
+        `<option value="${m}" ${m === f.mode ? 'selected' : ''}>${m.toUpperCase()}</option>`).join('');
+  const availableBooks = s.books.filter(b => !s.items.some(i => i.barcode === b.barcode));
+  const lockHint = inv.razorpay_qr_code_id
+    ? 'Razorpay invoices can only have their customer and reference details edited.'
+    : 'This invoice has been handed over to the temple. Void that payment-in first to change its items or amount.';
+  openModal(`<h3>Edit invoice ${esc(inv.invoice_number)}</h3>
+    <p class="hint">${locked ? esc(lockHint) : 'Correct the receipt details. Changing item quantities adjusts stock automatically.'}</p>
+    <div class="form-grid">
+      <div class="form-row"><label>Customer name *</label><input id="invEditName" value="${esc(f.name)}"></div>
+      <div class="form-row"><label>Phone *</label><input id="invEditPhone" type="tel" value="${esc(f.phone)}"></div>
+      <div class="form-row"><label>Payment mode</label><select id="invEditMode" ${locked ? 'disabled' : ''}>${modeOptions}</select></div>
+      <div class="form-row"><label>Payment reference</label><input id="invEditRef" value="${esc(f.ref)}"></div>
+      <div class="form-row"><label>Discount</label><input id="invEditDiscount" type="number" min="0" step="0.01" value="${Number(f.discount) || 0}" ${locked ? 'disabled' : ''}></div>
+    </div>
+    <h4>Items</h4>
+    <div class="table-scroll"><table>
+      <tr><th>Title</th><th>Barcode</th><th>Price</th><th>Qty</th>${locked ? '' : '<th></th>'}</tr>
+      ${s.items.map((i, idx) => `<tr>
+        <td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>&#8377;${Number(i.price).toFixed(2)}</td>
+        <td>${locked ? i.qty : `<input type="number" min="0" step="1" value="${i.qty}" style="width:82px" data-inv-item="${idx}" onchange="invoiceEditQty(${idx}, this.value)">`}</td>
+        ${locked ? '' : `<td><button class="danger" type="button" onclick="invoiceEditRemove(${idx})" aria-label="Remove item">&times;</button></td>`}
+      </tr>`).join('') || '<tr><td colspan="5" class="hint">No items.</td></tr>'}
+    </table></div>
+    ${locked ? '' : `<div class="form-row" style="margin-top:12px">
+      <label>Add book</label>
+      <select id="invEditAddBook"><option value="">Select a book</option>${availableBooks.map(b => `<option value="${esc(b.barcode)}">${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}</select>
+      <input id="invEditAddQty" type="number" min="1" value="1" style="width:82px" aria-label="Quantity to add">
+      <button class="action" type="button" onclick="invoiceEditAdd()">Add</button>
+    </div>`}
+    <div class="toolbar" style="margin-top:16px">
+      <button class="primary" onclick="invoiceEditSave()">Save changes</button>
+      <button class="action" onclick="invoiceEditCancel()">Cancel</button>
+    </div>`);
+}
+
+function invoiceEditQty(idx, value) {
+  invoiceEditCapture();
+  if (invoiceEditState?.items[idx]) invoiceEditState.items[idx].qty = Math.max(0, Number(value) || 0);
+}
+
+function invoiceEditRemove(idx) {
+  if (!invoiceEditState) return;
+  invoiceEditCapture();
+  invoiceEditState.items.splice(idx, 1);
+  renderInvoiceEdit();
+}
+
+function invoiceEditAdd() {
+  if (!invoiceEditState) return;
+  invoiceEditCapture();
+  const barcode = document.getElementById('invEditAddBook').value;
+  const qty = Number(document.getElementById('invEditAddQty').value) || 1;
+  if (!barcode) return toast('Select a book to add', 'error');
+  if (qty < 1) return toast('Quantity must be at least 1', 'error');
+  const book = invoiceEditState.books.find(b => b.barcode === barcode);
+  if (!book) return;
+  const existing = invoiceEditState.items.find(i => i.barcode === barcode);
+  if (existing) existing.qty += qty;
+  else invoiceEditState.items.push({ barcode: book.barcode, title: book.title, qty, price: Number(book.price) });
+  renderInvoiceEdit();
+}
+
+function invoiceEditCancel() {
+  const invoiceId = invoiceEditState?.invoice.id;
+  invoiceEditState = null;
+  if (invoiceId) invoiceDetail(invoiceId);
+  else closeModal();
+}
+
+async function invoiceEditSave() {
+  const s = invoiceEditState;
+  if (!s) return;
+  invoiceEditCapture();
+  document.querySelectorAll('#modalBox input[data-inv-item]').forEach(input => {
+    const idx = Number(input.dataset.invItem);
+    if (s.items[idx]) s.items[idx].qty = Math.max(0, Number(input.value) || 0);
+  });
+  const f = s.form;
+  const name = String(f.name || '').trim();
+  const phone = String(f.phone || '').trim();
+  if (!name) return toast('Customer name is required', 'error');
+  if (!phone) return toast('Phone number is required', 'error');
+  const body = { customer_name: name, customer_phone: phone, payment_ref: String(f.ref || '').trim() };
+  if (!s.amountLocked) {
+    const items = s.items.filter(i => i.qty > 0).map(i => ({ barcode: i.barcode, qty: i.qty }));
+    if (!items.length) return toast('An invoice must have at least one item', 'error');
+    body.payment_mode = f.mode;
+    body.discount = Number(f.discount) || 0;
+    body.items = items;
+  }
+  try {
+    const updated = await api('/api/pos/invoices/' + s.invoice.id, { method: 'PATCH', body });
+    invoiceEditState = null;
+    toast('Invoice updated', 'success');
+    await invoiceDetail(updated.id);
+    refreshCurrent();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function invoiceDelete(invoiceId, view, ...args) {
@@ -1895,7 +2259,7 @@ async function payments() {
       <div class="toolbar">${canRecord ? '<button class="primary" onclick="paymentForm()">New payment in</button>' : ''}</div>
       <div class="table-scroll"><table>
         <tr><th>Receipt</th><th>Date</th><th>Zone admin</th><th>Zone</th><th>Receipts</th><th>Cash received</th><th>Confirmed by</th><th>Actions</th></tr>
-        ${rows.map(r => `<tr>
+        ${rows.map(r => `<tr class="clickable-row" onclick="rowOpen(event, 'paymentDetail', ${r.id})">
           <td>${esc(r.receipt_number)}</td>
           <td>${esc(formatAuditTime(r.created_at))}</td>
           <td>${esc(r.zone_admin_name)}<span class="cart-book-barcode">${esc(r.zone_admin_username)}</span></td>
@@ -2264,7 +2628,7 @@ async function loadAudit() {
     state.auditRows = rows;
     const body = document.getElementById('auditRows');
     if (!body) return;
-    body.innerHTML = rows.map(a => `<tr>
+    body.innerHTML = rows.map(a => `<tr class="clickable-row" onclick="rowOpen(event, 'auditDetail', ${a.id})">
       <td class="audit-when">${esc(formatAuditTime(a.created_at))}</td>
       <td>${esc(a.username || '—')}</td>
       <td><span class="audit-tag ${auditActionClass(a.action)}">${esc(auditActionLabel(a.action))}</span></td>
@@ -2276,6 +2640,21 @@ async function loadAudit() {
       (rows.length >= 500 ? ' — showing the most recent 500, narrow the filters to see older entries' : '');
     enhanceTableFilters();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function auditDetail(auditId) {
+  const a = (state.auditRows || []).find(x => x.id === auditId);
+  if (!a) return;
+  openModal(`<h3>${esc(auditActionLabel(a.action))}</h3>
+    <div class="table-scroll"><table>
+      <tr><th>When</th><td>${esc(formatAuditTime(a.created_at))}</td></tr>
+      <tr><th>User</th><td>${esc(a.username || '—')}</td></tr>
+      <tr><th>Action</th><td>${esc(auditActionLabel(a.action))}</td></tr>
+      <tr><th>Record</th><td>${esc(auditEntityLabel(a.entity))}${a.entity_id ? ' #' + a.entity_id : ''}</td></tr>
+      <tr><th>Details</th><td>${esc(a.details || '—')}</td></tr>
+      <tr><th>IP</th><td>${esc(a.ip || '—')}</td></tr>
+    </table></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
 
 function clearAuditFilters() {
@@ -2341,7 +2720,7 @@ async function users() {
       <div class="toolbar">${canEdit ? '<button class="primary" onclick="userForm()">+ New user</button>' : ''}</div>
       <table>
         <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Active</th>${canEdit ? '<th>Actions</th>' : ''}</tr>
-        ${rows.map(u => `<tr>
+        ${rows.map(u => `<tr class="clickable-row" onclick="rowOpen(event, 'userRowOpen', ${u.id})">
           <td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
           <td>${esc(u.zone_name || '')}</td><td>${u.is_active ? 'Yes' : 'No'}</td>
           ${canEdit ? `<td>
@@ -2380,6 +2759,24 @@ async function userForm(userId = null) {
       </div>
     </div>
     <button class="primary" onclick="userSave(${u ? u.id : 'null'})">${u ? 'Save changes' : 'Create user'}</button>`);
+}
+
+function userRowOpen(userId) {
+  if (state.user.role === 'super_admin') userForm(userId);
+  else userDetail(userId);
+}
+
+function userDetail(userId) {
+  const u = (state.users || []).find(x => x.id === userId);
+  if (!u) return;
+  openModal(`<h3>${esc(u.username)}</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Name</th><td>${esc(u.name)}</td></tr>
+      <tr><th>Role</th><td>${esc(ROLE_LABELS[u.role] || u.role)}</td></tr>
+      <tr><th>Zone</th><td>${esc(u.zone_name || '—')}</td></tr>
+      <tr><th>Active</th><td>${u.is_active ? 'Yes' : 'No'}</td></tr>
+    </table></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
 
 async function userSave(userId) {
@@ -2434,7 +2831,7 @@ async function locations() {
       <div class="toolbar"><button class="primary" onclick="locationForm()">+ New location</button></div>
       <table>
         <tr><th>Code</th><th>Name</th><th>Type</th><th>Parent</th><th>Actions</th></tr>
-        ${rows.map(l => `<tr><td>${esc(l.code)}</td><td>${esc(l.name)}</td><td>${esc(l.type)}</td><td>${esc(l.parent_name || '')}</td><td><button class="action" onclick="locationForm(${l.id})">Edit</button><button class="danger" onclick="locationDelete(${l.id})">Delete</button></td></tr>`).join('')}
+        ${rows.map(l => `<tr class="clickable-row" onclick="rowOpen(event, 'locationForm', ${l.id})"><td>${esc(l.code)}</td><td>${esc(l.name)}</td><td>${esc(l.type)}</td><td>${esc(l.parent_name || '')}</td><td><button class="action" onclick="locationForm(${l.id})">Edit</button><button class="danger" onclick="locationDelete(${l.id})">Delete</button></td></tr>`).join('')}
       </table>
     </div>`;
 }

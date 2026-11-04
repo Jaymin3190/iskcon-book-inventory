@@ -8,7 +8,7 @@ from ..auth import has_role, require_roles
 from ..database import get_db
 from ..services.audit import log_audit
 from ..services.ledger import check_available, ensure_stock, move_stock
-from ..services.scope import can_view, location_ids
+from ..services.scope import can_view, location_ids, stock_location_ids
 from ..services.timezone import now_ist
 
 router = APIRouter(prefix="/api/stock", tags=["stock"])
@@ -18,7 +18,7 @@ DAMAGED_REASON_CODES = ("DAMAGED", "STAINED", "MISSING_PAGES", "PRINT_ERROR", "O
 
 @router.get("")
 def current_stock(location_id: int = None, book_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
-    ids = location_ids(db, user)
+    ids = stock_location_ids(db, user)
     sql = """SELECT s.book_id, s.location_id, s.qty, s.updated_at,
                     b.title, b.barcode, b.isbn, b.price, b.publication,
                     l.code AS location_code, l.name AS location_name
@@ -39,7 +39,7 @@ def current_stock(location_id: int = None, book_id: int = None, db=Depends(get_d
 
 @router.get("/ledger")
 def stock_ledger(location_id: int = None, book_id: int = None, limit: int = 200, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
-    ids = location_ids(db, user)
+    ids = stock_location_ids(db, user)
     sql = """SELECT m.*, b.title, l.code AS location_code, u.username AS user_name
              FROM stock_movements m
              JOIN books b ON b.id = m.book_id
@@ -168,7 +168,7 @@ class CountStartIn(BaseModel):
 @router.post("/counts")
 def create_count(data: CountStartIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     location_id = data.location_id
-    if location_id not in location_ids(db, user):
+    if location_id not in stock_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     cur = db.execute(
         "INSERT INTO stock_counts (location_id, status, counted_by) VALUES (?, 'open', ?)",
@@ -186,7 +186,7 @@ def add_count_items(count_id: int, items: list[CountItemIn], db=Depends(get_db),
         raise HTTPException(404, "Count not found")
     if count["status"] != "open":
         raise HTTPException(400, "Count is already completed")
-    if count["location_id"] not in location_ids(db, user):
+    if count["location_id"] not in stock_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     for it in items:
         db.execute(
@@ -206,7 +206,7 @@ def complete_count(count_id: int, db=Depends(get_db), user=Depends(require_roles
         raise HTTPException(404, "Count not found")
     if count["status"] != "open":
         raise HTTPException(400, "Count is already completed")
-    if count["location_id"] not in location_ids(db, user):
+    if count["location_id"] not in stock_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     items = db.execute("SELECT * FROM stock_count_items WHERE count_id = ?", (count_id,)).fetchall()
     if not items:
@@ -238,7 +238,7 @@ def delete_count(count_id: int, db=Depends(get_db), user=Depends(require_roles("
         raise HTTPException(404, "Count not found")
     if count["status"] != "open":
         raise HTTPException(409, "Cannot delete: count already completed (adjustments applied)")
-    if count["location_id"] not in location_ids(db, user):
+    if count["location_id"] not in stock_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     db.execute("DELETE FROM stock_count_items WHERE count_id = ?", (count_id,))
     db.execute("DELETE FROM stock_counts WHERE id = ?", (count_id,))
@@ -265,7 +265,9 @@ def list_transfers(db=Depends(get_db), user=Depends(require_roles("super_admin",
     sql = """SELECT t.*,
                     f.code AS from_code, f.name AS from_name,
                     to_l.code AS to_code, to_l.name AS to_name,
-                    ru.username AS requested_by_name
+                    ru.username AS requested_by_name,
+                    (SELECT COUNT(*) FROM transfer_items ti WHERE ti.transfer_id = t.id) AS item_count,
+                    (SELECT COALESCE(SUM(ti.qty),0) FROM transfer_items ti WHERE ti.transfer_id = t.id) AS units
              FROM transfers t
              JOIN locations f ON f.id = t.from_location_id
              JOIN locations to_l ON to_l.id = t.to_location_id
@@ -281,11 +283,17 @@ def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_role
     t = db.execute(
         """SELECT t.*, f.code AS from_code, f.name AS from_name,
                   to_l.code AS to_code, to_l.name AS to_name,
-                  ru.username AS requested_by_name
+                  ru.username AS requested_by_name,
+                  au.username AS approved_by_name,
+                  du.username AS dispatched_by_name,
+                  rcu.username AS received_by_name
            FROM transfers t
            JOIN locations f ON f.id = t.from_location_id
            JOIN locations to_l ON to_l.id = t.to_location_id
            LEFT JOIN users ru ON ru.id = t.requested_by
+           LEFT JOIN users au ON au.id = t.approved_by
+           LEFT JOIN users du ON du.id = t.dispatched_by
+           LEFT JOIN users rcu ON rcu.id = t.received_by
            WHERE t.id = ?""",
         (transfer_id,),
     ).fetchone()
@@ -527,6 +535,35 @@ def list_returns(db=Depends(get_db), user=Depends(require_roles("super_admin", "
              WHERE r.location_id IN ({})
              ORDER BY r.id DESC""".format(",".join("?" * len(ids)))
     return [dict(r) for r in db.execute(sql, list(ids)).fetchall()]
+
+
+@router.get("/returns/{return_id}")
+def get_return(return_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+    r = db.execute(
+        """SELECT r.*, l.code AS location_code, l.name AS location_name,
+                  cl.name AS credit_location_name,
+                  cu.username AS created_by_name, pu.username AS processed_by_name
+           FROM returns r
+           JOIN locations l ON l.id = r.location_id
+           LEFT JOIN locations cl ON cl.id = r.credit_location_id
+           LEFT JOIN users cu ON cu.id = r.created_by
+           LEFT JOIN users pu ON pu.id = r.processed_by
+           WHERE r.id = ?""",
+        (return_id,),
+    ).fetchone()
+    if not r:
+        raise HTTPException(404, "Return not found")
+    if r["location_id"] not in location_ids(db, user):
+        raise HTTPException(403, "Forbidden")
+    items = db.execute(
+        """SELECT ri.qty, b.title, b.barcode, b.price
+           FROM return_items ri JOIN books b ON b.id = ri.book_id
+           WHERE ri.return_id = ?""",
+        (return_id,),
+    ).fetchall()
+    data = dict(r)
+    data["items"] = [dict(item) for item in items]
+    return data
 
 
 @router.post("/returns")

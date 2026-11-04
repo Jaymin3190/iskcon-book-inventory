@@ -55,6 +55,20 @@ class InvoiceIn(BaseModel):
     items: list[InvoiceItemIn]
 
 
+class InvoiceEditItemIn(BaseModel):
+    barcode: str
+    qty: int
+
+
+class InvoiceEditIn(BaseModel):
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    payment_mode: Optional[str] = None
+    payment_ref: Optional[str] = None
+    discount: Optional[float] = None
+    items: Optional[list[InvoiceEditItemIn]] = None
+
+
 @router.get("/invoices")
 def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     ids = invoice_location_ids(db, user)
@@ -235,7 +249,160 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
     ).fetchall()
     data = dict(inv)
     data["items"] = [dict(r) for r in items]
+    data["handed_over"] = bool(
+        db.execute("SELECT 1 FROM cash_submission_items WHERE invoice_id = ?", (invoice_id,)).fetchone()
+    )
     return data
+
+
+@router.patch("/invoices/{invoice_id}")
+def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
+    inv = db.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv["status"] != "paid":
+        raise HTTPException(409, "Only paid invoices can be edited")
+    if inv["location_id"] not in invoice_location_ids(db, user):
+        raise HTTPException(403, "Forbidden")
+
+    handed_over = db.execute(
+        "SELECT 1 FROM cash_submission_items WHERE invoice_id = ?", (invoice_id,)
+    ).fetchone()
+    razorpay_invoice = inv["razorpay_qr_code_id"] is not None
+    amount_change = data.items is not None or data.discount is not None or data.payment_mode is not None
+    if handed_over and amount_change:
+        raise HTTPException(
+            409,
+            "This invoice has already been handed over to the temple. Void that payment-in before editing its items or amount.",
+        )
+    if razorpay_invoice and amount_change:
+        raise HTTPException(
+            409,
+            "Razorpay invoices can only have their customer and payment reference details edited.",
+        )
+
+    old_items = db.execute(
+        "SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY id", (invoice_id,)
+    ).fetchall()
+    old_by_book = {row["book_id"]: row for row in old_items}
+    subtotal = round(sum(float(row["line_total"]) for row in old_items), 2)
+
+    new_lines = None
+    if data.items is not None:
+        if not data.items:
+            raise HTTPException(400, "An invoice must have at least one item")
+        resolved = {}
+        for item in data.items:
+            if item.qty <= 0:
+                raise HTTPException(400, "Quantities must be positive")
+            book = db.execute(
+                "SELECT * FROM books WHERE barcode = ? OR isbn = ?",
+                (item.barcode, item.barcode),
+            ).fetchone()
+            if not book:
+                raise HTTPException(400, f"Unknown barcode: {item.barcode}")
+            if book["id"] in resolved:
+                resolved[book["id"]] = (book, resolved[book["id"]][1] + item.qty)
+            else:
+                resolved[book["id"]] = (book, item.qty)
+
+        deltas = []
+        new_lines = []
+        for book_id, (book, qty) in resolved.items():
+            old = old_by_book.get(book_id)
+            unit_price = float(old["unit_price"]) if old else float(book["price"])
+            if old:
+                difference = qty - int(old["qty"])
+                if difference > 0 and not check_available(db, book_id, inv["location_id"], difference):
+                    raise HTTPException(400, f"Insufficient stock for '{book['title']}' at this location")
+                if difference:
+                    deltas.append((book_id, -difference))
+            else:
+                if not check_available(db, book_id, inv["location_id"], qty):
+                    raise HTTPException(400, f"Insufficient stock for '{book['title']}' at this location")
+                deltas.append((book_id, -qty))
+            new_lines.append((book_id, qty, unit_price, round(unit_price * qty, 2)))
+        for book_id, old in old_by_book.items():
+            if book_id not in resolved:
+                deltas.append((book_id, int(old["qty"])))
+        subtotal = round(sum(line[3] for line in new_lines), 2)
+
+        try:
+            for book_id, delta in deltas:
+                if delta:
+                    move_stock(
+                        db, book_id, inv["location_id"], delta, "SALE_ADJUSTED",
+                        "invoices", invoice_id, user["id"], "invoice edited", commit=False,
+                    )
+        except ValueError as error:
+            db.rollback()
+            raise HTTPException(400, str(error)) from error
+
+    customer_name = inv["customer_name"]
+    if data.customer_name is not None:
+        customer_name = data.customer_name.strip()
+        if not customer_name:
+            raise HTTPException(400, "Customer name is required")
+    customer_phone = inv["customer_phone"]
+    if data.customer_phone is not None:
+        customer_phone = data.customer_phone.strip()
+        if not customer_phone:
+            raise HTTPException(400, "Phone number is required")
+    payment_ref = inv["payment_ref"]
+    if data.payment_ref is not None:
+        payment_ref = data.payment_ref.strip() or None
+
+    payment_mode = inv["payment_mode"]
+    if data.payment_mode is not None:
+        if data.payment_mode not in ("cash", "upi", "card", "ledger"):
+            raise HTTPException(400, "Invalid payment mode")
+        payment_mode = data.payment_mode
+
+    if data.discount is not None:
+        if data.discount < 0:
+            raise HTTPException(400, "Discount cannot be negative")
+        discount = min(float(data.discount), subtotal)
+    else:
+        discount = min(float(inv["discount"] or 0), subtotal)
+    total = round(subtotal - discount, 2)
+
+    db.execute(
+        """UPDATE invoices
+              SET customer_name = ?, customer_phone = ?, payment_mode = ?,
+                  payment_ref = ?, subtotal = ?, discount = ?, total = ?
+            WHERE id = ?""",
+        (customer_name, customer_phone, payment_mode, payment_ref, subtotal, discount, total, invoice_id),
+    )
+    if new_lines is not None:
+        db.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
+        for book_id, qty, unit_price, line_total in new_lines:
+            db.execute(
+                "INSERT INTO invoice_items (invoice_id, book_id, qty, unit_price, line_total) VALUES (?,?,?,?,?)",
+                (invoice_id, book_id, qty, unit_price, line_total),
+            )
+    db.commit()
+    log_audit(
+        db, user["id"], "INVOICE_UPDATE", "invoices", invoice_id,
+        f"{inv['invoice_number']} updated to total {total}", user["username"],
+    )
+
+    updated = db.execute(
+        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+           FROM invoices i
+           JOIN locations l ON l.id = i.location_id
+           LEFT JOIN users u ON u.id = i.cashier_id
+           WHERE i.id = ?""",
+        (invoice_id,),
+    ).fetchone()
+    items = db.execute(
+        """SELECT ii.*, b.title, b.barcode
+           FROM invoice_items ii JOIN books b ON b.id = ii.book_id
+           WHERE ii.invoice_id = ?""",
+        (invoice_id,),
+    ).fetchall()
+    result = dict(updated)
+    result["items"] = [dict(row) for row in items]
+    return result
 
 
 def invoice_date_ist(value):

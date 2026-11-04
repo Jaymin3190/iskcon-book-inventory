@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 from ..auth import has_role, require_roles
 from ..database import get_db
-from ..services.scope import invoice_location_ids, location_ids, zone_location_ids
+from ..services.scope import invoice_location_ids, location_ids, stock_location_ids, zone_location_ids
 
 router = APIRouter(tags=["reports"])
 
@@ -85,7 +85,7 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
 
 @router.get("/api/reports/stock-summary")
 def stock_summary(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
-    ids = location_ids(db, user)
+    ids = stock_location_ids(db, user)
     sql = """SELECT l.id AS location_id, l.code, l.name, l.type, l.parent_id,
                     COUNT(s.book_id) AS skus, COALESCE(SUM(s.qty),0) AS total_units,
                     COALESCE(SUM(s.qty * b.price),0) AS stock_value

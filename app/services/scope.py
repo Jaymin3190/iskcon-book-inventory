@@ -37,6 +37,19 @@ def zone_location_ids(db, zone_id) -> set:
     return {r["id"] for r in rows}
 
 
+def stock_location_ids(db, user) -> set:
+    """Locations whose stock a user may see.
+
+    Zone admins may only see their own zone (and places beneath it), never the
+    parent warehouse. Other roles keep their existing location scope.
+    """
+    if user["role"] == "zone_admin":
+        return zone_location_ids(db, user["zone_id"])
+    if user["role"] == "distributor":
+        return {user["zone_id"]} if user["zone_id"] else {None}
+    return location_ids(db, user)
+
+
 def invoice_location_ids(db, user) -> set:
     """Locations whose invoices a user may see.
 
