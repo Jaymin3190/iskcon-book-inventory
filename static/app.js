@@ -259,9 +259,11 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('resize', () => { if (window.innerWidth > 960) setSidebarOpen(false); });
 
-function openModal(html) {
+function openModal(html, wide = false) {
   stopCam();
-  document.getElementById('modalBox').innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;
+  const modal = document.getElementById('modalBox');
+  modal.classList.toggle('wide-modal', wide);
+  modal.innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;
   document.getElementById('modalBackdrop').hidden = false;
   enhanceTableFilters();
 }
@@ -435,7 +437,7 @@ async function zoneDetails(zoneId) {
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Customer</th><th>Payment</th><th>Status</th><th>Qty</th><th>Total</th><th></th></tr>
       ${invoiceRows}
     </table>
-    <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`);
+    <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`, true);
 }
 
 async function distributorDetails(userId, zoneId) {
@@ -476,7 +478,7 @@ async function distributorDetails(userId, zoneId) {
     <div class="toolbar" style="margin:16px 0 0">
       <button class="action" onclick="zoneDetails(${zoneId})">Back to distributors</button>
       <button class="action" onclick="closeModal()">Close</button>
-    </div>`);
+    </div>`, true);
 }
 
 let bookQuery = '';

@@ -312,7 +312,7 @@ def receipt_html(payment) -> str:
       @media print {{ body {{ margin: 8mm; }} }}
     </style></head><body>
     <div class="head">
-      <h1>ISKCON Book Distribution</h1>
+      <h1>ISKCON Jamnagar Book Management</h1>
       <div class="sub">Cash payment-in receipt &mdash; {escape(str(payment['receipt_number']))}</div>
       <div class="sub">Date: {escape(format_ist_datetime(payment['created_at']))}</div>
     </div>
