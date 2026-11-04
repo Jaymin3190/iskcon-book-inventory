@@ -1505,11 +1505,18 @@ async function checkout() {
     return;
   }
   state.cart = [];
+  renderCart();
+  state.lastInvoice = {
+    invoiceId: res.invoice_id, invoiceNumber: res.invoice_number,
+    customerName: custName, customerPhone: custPhone,
+    total: Number(res.total), items: purchasedItems,
+  };
   if (payMode === 'razorpay') {
     state.pendingPayment = {
       invoiceId: res.invoice_id,
       invoiceNumber: res.invoice_number,
       customerName: custName,
+      customerPhone: custPhone,
       total: Number(res.total),
       items: purchasedItems,
     };
@@ -1524,14 +1531,47 @@ async function checkout() {
 function showSavedInvoice(invoice, detail) {
   openModal(`<h3>Invoice saved</h3>
     <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
-    <p class="hint">${esc(detail)}. Share the PDF using the device share menu (choose WhatsApp or another app), or download it.</p>
+    <p class="hint">${esc(detail)}. Share opens the customer's WhatsApp chat with the bill details; Save downloads the invoice PDF.</p>
     <div class="toolbar">
-      <button id="shareInvoicePdfButton" class="primary" disabled onclick="shareInvoicePdf(${invoice.invoice_id})">Share PDF</button>
-      <button id="downloadInvoicePdfButton" class="action" disabled onclick="downloadInvoicePdf(${invoice.invoice_id})">Download PDF</button>
+      <button class="primary" onclick="shareSavedInvoice(${invoice.invoice_id})">Share</button>
+      <button id="saveInvoiceButton" class="action" disabled onclick="downloadInvoicePdf(${invoice.invoice_id})">Save</button>
     </div>
-    <p id="invoicePdfStatus" class="hint">Preparing invoice PDF...</p>
-    <button class="action" onclick="closeModal(); refreshCurrent()">Done</button>`);
+    <p id="invoicePdfStatus" class="hint">Preparing invoice PDF...</p>`);
   prepareInvoicePdf(invoice.invoice_id);
+}
+
+function shareSavedInvoice(invoiceId) {
+  if (whatsappPhoneNumber(state.lastInvoice?.customerPhone)) {
+    shareInvoiceWhatsApp();
+    return;
+  }
+  shareInvoicePdf(invoiceId);
+}
+
+function whatsappInvoiceMessage(meta) {
+  const lines = [
+    `Hare Krishna ${meta.customerName},`,
+    'Thank you for your purchase from ISKCON Jamnagar Books & Gifts.',
+    '',
+    `Invoice: ${meta.invoiceNumber}`,
+    `Total: \u20b9${Number(meta.total).toFixed(2)}`,
+  ];
+  if (meta.items && meta.items.length) {
+    lines.push('', 'Items:', ...meta.items.map(i => `- ${i.title} x ${i.qty}`));
+  }
+  return lines.join('\n');
+}
+
+function shareInvoiceWhatsApp() {
+  const meta = state.lastInvoice;
+  if (!meta) { toast('Invoice details are not available', 'error'); return; }
+  const number = whatsappPhoneNumber(meta.customerPhone);
+  if (!number) { toast('This bill has no valid WhatsApp phone number', 'error'); return; }
+  const url = `https://wa.me/${number}?text=${encodeURIComponent(whatsappInvoiceMessage(meta))}`;
+  const win = window.open(url, '_blank');
+  if (!win) { toast('Allow pop-ups to open WhatsApp', 'error'); return; }
+  try { win.opener = null; win.focus(); } catch (_) {}
+  toast('Opening WhatsApp for ' + meta.customerName, 'success');
 }
 
 async function fetchInvoicePdf(invoiceId) {
@@ -1550,18 +1590,15 @@ async function fetchInvoicePdf(invoiceId) {
 }
 
 async function prepareInvoicePdf(invoiceId) {
-  const shareButton = document.getElementById('shareInvoicePdfButton');
-  const downloadButton = document.getElementById('downloadInvoicePdfButton');
+  const saveButton = document.getElementById('saveInvoiceButton');
   const status = document.getElementById('invoicePdfStatus');
   try {
     await fetchInvoicePdf(invoiceId);
-    if (shareButton) shareButton.disabled = false;
-    if (downloadButton) downloadButton.disabled = false;
-    if (status) status.textContent = 'PDF is ready to share or download.';
+    if (saveButton) saveButton.disabled = false;
+    if (status) status.textContent = 'PDF is ready to save.';
   } catch (e) {
-    if (shareButton) shareButton.disabled = false;
-    if (downloadButton) downloadButton.disabled = false;
-    if (status) status.textContent = `PDF could not be prepared yet: ${e.message}. Select an option to retry.`;
+    if (saveButton) saveButton.disabled = false;
+    if (status) status.textContent = `PDF could not be prepared yet: ${e.message}. Select Save to retry.`;
   }
 }
 
@@ -1644,10 +1681,19 @@ async function checkInvoicePayment(invoiceId) {
         invoiceId: id,
         invoiceNumber: invoice.invoice_number,
         customerName: invoice.customer_name,
+        customerPhone: invoice.customer_phone,
         total: Number(invoice.total),
         items: invoice.items.map(i => ({ title: i.title, qty: i.qty })),
       };
       state.pendingPayment = { ...confirmed, paymentRef: invoice.razorpay_payment_id };
+      state.lastInvoice = {
+        invoiceId: id,
+        invoiceNumber: confirmed.invoiceNumber,
+        customerName: confirmed.customerName || invoice.customer_name,
+        customerPhone: confirmed.customerPhone || invoice.customer_phone,
+        total: Number(confirmed.total),
+        items: confirmed.items || invoice.items,
+      };
       showSavedInvoice({
         ...invoice,
         invoice_id: id,
