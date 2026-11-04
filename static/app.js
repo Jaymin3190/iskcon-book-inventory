@@ -1625,18 +1625,46 @@ async function checkout() {
 function showSavedInvoice(invoice, detail) {
   openModal(`<h3>Invoice saved</h3>
     <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
-    <p class="hint">${esc(detail)}. Share opens the customer's WhatsApp chat with the bill details; Save downloads the invoice PDF.</p>
+    <p class="hint">${esc(detail)}. Share sends the invoice PDF through the share sheet where the browser supports attachments, otherwise it opens the customer's WhatsApp chat with the bill details. Save downloads the PDF.</p>
     <div class="toolbar">
       <button class="primary" onclick="shareSavedInvoice(${invoice.invoice_id})">Share</button>
       <button id="saveInvoiceButton" class="action" disabled onclick="downloadInvoicePdf(${invoice.invoice_id})">Save</button>
+      <button class="action" onclick="finishSavedInvoice()">Done</button>
     </div>
     <p id="invoicePdfStatus" class="hint">Preparing invoice PDF...</p>`);
   prepareInvoicePdf(invoice.invoice_id);
 }
 
+function finishSavedInvoice() {
+  closeModal();
+  const fields = ['custName', 'custPhone', 'payRef', 'discount'];
+  fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  state.cart = [];
+  state.lastInvoice = null;
+  state.invoicePdf = null;
+  state.pendingPayment = null;
+  renderCart();
+  refreshCurrent();
+}
+
 function shareSavedInvoice(invoiceId) {
+  const cached = state.invoicePdf?.invoiceId === invoiceId ? state.invoicePdf.file : null;
+  if (cached && typeof File !== 'undefined' && navigator.share && navigator.canShare) {
+    const file = new File([cached], `invoice-${invoiceId}.pdf`, { type: 'application/pdf' });
+    if (navigator.canShare({ files: [file] })) {
+      const meta = state.lastInvoice;
+      navigator.share({
+        files: [file],
+        title: meta ? `Invoice ${meta.invoiceNumber}` : `Invoice ${invoiceId}`,
+        text: meta ? whatsappInvoiceMessage(meta) : 'Thank you for your purchase. Please find the invoice attached.',
+      }).then(() => toast('Invoice shared', 'success'))
+        .catch(e => { if (e.name !== 'AbortError') toast(e.message, 'error'); });
+      return;
+    }
+  }
   if (whatsappPhoneNumber(state.lastInvoice?.customerPhone)) {
     shareInvoiceWhatsApp();
+    toast('Attachments need the share sheet; Save downloads the PDF so you can attach it.', 'info');
     return;
   }
   shareInvoicePdf(invoiceId);
