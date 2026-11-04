@@ -808,9 +808,10 @@ async function renderTransfers() {
     <div class="card">
       <div class="toolbar"><button class="primary" onclick="transferForm()">+ Request transfer</button></div>
       <table>
-        <tr><th>#</th><th>From</th><th>To</th><th>Items</th><th>Status</th><th>Requested by</th><th>Actions</th></tr>
+        <tr><th>Request #</th><th>Requested</th><th>From</th><th>To</th><th>Items</th><th>Status</th><th>Raised by</th><th>Actions</th></tr>
         ${rows.map(t => `<tr>
-          <td>${esc(t.request_number)}</td><td>${esc(t.from_name)}</td><td>${esc(t.to_name)}</td>
+          <td>${esc(t.request_number)}</td><td>${esc(formatAuditTime(t.requested_at))}</td>
+          <td>${esc(t.from_name)}</td><td>${esc(t.to_name)}</td>
           <td><button class="action" onclick="transferDetail(${t.id})">view</button></td>
           <td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td>
           <td>${esc(t.requested_by_name || '')}</td>
@@ -849,7 +850,7 @@ async function tDelete(id, received = false) {
 async function transferDetail(id) {
   const t = await api('/api/stock/transfers/' + id);
   openModal(`<h3>Transfer ${esc(t.request_number)} — <span class="badge ${esc(t.status)}">${esc(t.status)}</span></h3>
-    <p style="font-size:13px">From: ${esc(t.from_name)} &rarr; To: ${esc(t.to_name)}<br>${esc(t.note || '')}</p>
+    <p style="font-size:13px">Raised ${esc(formatAuditTime(t.requested_at))} by ${esc(t.requested_by_name || 'unknown')}<br>From: ${esc(t.from_name)} &rarr; To: ${esc(t.to_name)}<br>${esc(t.note || '')}</p>
     <table><tr><th>Title</th><th>Barcode</th><th>Qty</th><th>Price</th></tr>
       ${t.items.map(i => `<tr><td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>${i.qty}</td><td>&#8377;${i.price}</td></tr>`).join('')}
     </table>`);

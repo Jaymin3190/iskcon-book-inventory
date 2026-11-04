@@ -269,6 +269,16 @@ def _migrate_razorpay(conn):
     )
 
 
+def _migrate_transfer_numbers(conn):
+    """Use short, human-friendly request numbers such as TRF-0001."""
+    for row in conn.execute("SELECT id, request_number FROM transfers").fetchall():
+        short = f"TRF-{row[0]:04d}"
+        if row[1] != short:
+            conn.execute(
+                "UPDATE transfers SET request_number = ? WHERE id = ?", (short, row[0])
+            )
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -276,5 +286,6 @@ def init_db():
     conn.executescript(SCHEMA)
     _migrate_users_zone_only(conn)
     _migrate_razorpay(conn)
+    _migrate_transfer_numbers(conn)
     conn.commit()
     conn.close()

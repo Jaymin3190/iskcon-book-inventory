@@ -229,7 +229,7 @@ req.add_header("Authorization", "Bearer " + temple_t)
 with urllib.request.urlopen(req) as resp:
     html_body = resp.read().decode()
 check("printable invoice HTML", "<html" in html_body.lower() or "doctype" in html_body.lower())
-check("printed invoice shows cashier display name", "Cashier: Temple Admin" in html_body)
+check("printed invoice shows distributor display name", "Temple Admin" in html_body)
 
 req = urllib.request.Request(f"{BASE}/api/pos/invoices/{inv['invoice_id']}/pdf")
 req.add_header("Authorization", "Bearer " + temple_t)

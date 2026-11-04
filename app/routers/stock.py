@@ -278,7 +278,17 @@ def list_transfers(db=Depends(get_db), user=Depends(require_roles("super_admin",
 
 @router.get("/transfers/{transfer_id}")
 def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
-    t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
+    t = db.execute(
+        """SELECT t.*, f.code AS from_code, f.name AS from_name,
+                  to_l.code AS to_code, to_l.name AS to_name,
+                  ru.username AS requested_by_name
+           FROM transfers t
+           JOIN locations f ON f.id = t.from_location_id
+           JOIN locations to_l ON to_l.id = t.to_location_id
+           LEFT JOIN users ru ON ru.id = t.requested_by
+           WHERE t.id = ?""",
+        (transfer_id,),
+    ).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
     if not can_view(db, user, t["from_location_id"]) and not can_view(db, user, t["to_location_id"]):
@@ -385,13 +395,15 @@ def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_
     if shortages:
         raise HTTPException(400, "Insufficient warehouse stock to issue: " + ", ".join(shortages))
 
-    num = f"TRF-{now_ist().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:12].upper()}"
+    num = f"TRF-{uuid4().hex[:12].upper()}"
     cur = db.execute(
         """INSERT INTO transfers (request_number, from_location_id, to_location_id, status, requested_by, note)
            VALUES (?,?,?, 'requested', ?, ?)""",
         (num, data.from_location_id, data.to_location_id, user["id"], data.note),
     )
     tid = cur.lastrowid
+    num = f"TRF-{tid:04d}"
+    db.execute("UPDATE transfers SET request_number = ? WHERE id = ?", (num, tid))
     for book_id, qty in requested_qty.items():
         db.execute(
             "INSERT INTO transfer_items (transfer_id, book_id, qty) VALUES (?,?,?)",
