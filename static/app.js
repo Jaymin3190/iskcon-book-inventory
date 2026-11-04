@@ -340,7 +340,7 @@ async function dashboard() {
       <h2>Zone overview</h2>
       <p class="hint">Stock and sales for every zone. Select a zone to see its distributors and their bills.</p>
       <table class="zone-table">
-        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th></th></tr>
+        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Cash</th><th>UPI</th><th>Razorpay</th></tr>
         ${zones.map(z => `<tr class="zone-row" onclick="zoneDetails(${z.id})">
           <td><strong>${esc(z.name)}</strong><span class="cart-book-barcode">${esc(z.code)}</span></td>
           <td>${z.stock_units}</td>
@@ -351,11 +351,19 @@ async function dashboard() {
           <td>&#8377;${Number(z.cash_total || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.upi_total || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.razorpay_total || 0).toFixed(2)}</td>
-          <td><button class="action" onclick="event.stopPropagation(); zoneDetails(${z.id})">View</button></td>
-        </tr>`).join('') || '<tr><td colspan="10" class="hint">No zones found.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="9" class="hint">No zones found.</td></tr>'}
       </table>
     </div>` : '';
   document.getElementById('content').innerHTML = `
+    <div class="card dashboard-exports">
+      <h2>Export data</h2>
+      <p class="hint">Download the data available to your account as CSV files.</p>
+      <div class="toolbar">
+        ${canViewZones ? `<button class="action" onclick="exportDashboardData('users')">Export users</button><button class="action" onclick="exportDashboardData('zones')">Export zones</button>` : ''}
+        <button class="action" onclick="exportDashboardData('books')">Export books</button>
+        <button class="action" onclick="exportDashboardData('pos')">Export POS invoices</button>
+      </div>
+    </div>
     <div class="stats">
       <div class="stat stock-units-stat"><div class="num">${totalUnits}</div><div class="lbl">Total stock (all locations)</div></div>
       <div class="stat warehouse-units-stat"><div class="num">${warehouseUnits}</div><div class="lbl">Warehouse stock available to issue</div></div>
@@ -379,6 +387,90 @@ async function dashboard() {
         ${tf.map(t => `<tr><td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td><td>${t.n}</td></tr>`).join('')}
       </table>
     </div>`;
+}
+
+function downloadCsv(filename, columns, rows) {
+  const csvValue = value => {
+    if (value == null) return '';
+    const text = String(value);
+    const safeText = typeof value === 'string' && /^[\s]*[=+\-@]/.test(text) ? `'${text}` : text;
+    return `"${safeText.replace(/"/g, '""')}"`;
+  };
+  const csv = [
+    columns.map(([, label]) => csvValue(label)),
+    ...rows.map(row => columns.map(([key, , format]) =>
+      csvValue(format ? format(row[key], row) : row[key])
+    )),
+  ].map(row => row.join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function exportDashboardData(type) {
+  const exports = {
+    users: {
+      endpoint: '/api/users',
+      filename: 'users',
+      columns: [
+        ['id', 'User ID'], ['name', 'Name'], ['username', 'Username'], ['role', 'Role'],
+        ['zone_name', 'Zone'], ['is_active', 'Status', value => value ? 'Active' : 'Inactive'],
+        ['created_at', 'Created', formatAuditTime],
+      ],
+    },
+    zones: {
+      endpoint: '/api/reports/zones',
+      filename: 'zones',
+      columns: [
+        ['code', 'Code'], ['name', 'Zone'], ['stock_units', 'Stock units'],
+        ['stock_value', 'Stock value'], ['distributor_count', 'Active distributors'],
+        ['invoice_count', 'Bills'], ['books_sold', 'Books sold'], ['revenue', 'Revenue'],
+        ['cash_total', 'Cash'], ['upi_total', 'UPI'], ['razorpay_total', 'Razorpay'],
+      ],
+    },
+    books: {
+      endpoint: '/api/books',
+      filename: 'books',
+      columns: [
+        ['id', 'Book ID'], ['title', 'Title'], ['barcode', 'Barcode'], ['isbn', 'ISBN'],
+        ['language', 'Language'], ['publication', 'Publication'], ['price', 'Price'],
+        ['created_at', 'Created', formatAuditTime],
+      ],
+    },
+    pos: {
+      endpoint: '/api/pos/invoices/export',
+      filename: 'pos-invoices',
+      columns: [
+        ['invoice_number', 'Invoice'], ['created_at', 'Date', formatAuditTime],
+        ['location_name', 'Location'], ['cashier_name', 'Cashier'],
+        ['cashier_username', 'Cashier username'], ['customer_name', 'Customer'],
+        ['customer_phone', 'Phone'], ['payment_mode', 'Payment mode'],
+        ['payment_ref', 'Payment reference'], ['status', 'Status'],
+        ['book_title', 'Book'], ['barcode', 'Barcode'], ['qty', 'Quantity'],
+        ['unit_price', 'Unit price'], ['line_total', 'Line total'],
+        ['subtotal', 'Invoice subtotal'], ['discount', 'Discount'], ['total', 'Invoice total'],
+      ],
+    },
+  };
+  const config = exports[type];
+  if (!config) { toast('Unknown export type', 'error'); return; }
+  try {
+    const rows = await api(config.endpoint);
+    if (!rows.length) { toast('No data available to export', 'error'); return; }
+    downloadCsv(
+      `iskcon-jamnagar-${config.filename}-${new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}.csv`,
+      config.columns,
+      rows,
+    );
+    toast(`Exported ${rows.length} ${type === 'pos' ? 'invoice line' : type} record${rows.length === 1 ? '' : 's'}`, 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 function miniStat(label, value) {

@@ -71,6 +71,32 @@ def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", 
     return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
+@router.get("/invoices/export")
+def export_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+    ids = invoice_location_ids(db, user)
+    sql = """SELECT i.id, i.invoice_number, i.created_at,
+                    l.name AS location_name,
+                    u.name AS cashier_name, u.username AS cashier_username,
+                    i.customer_name, i.customer_phone,
+                    CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
+                         ELSE i.payment_mode END AS payment_mode,
+                    i.payment_ref, i.status, i.subtotal, i.discount, i.total,
+                    b.title AS book_title, b.barcode,
+                    ii.qty, ii.unit_price, ii.line_total
+             FROM invoices i
+             JOIN locations l ON l.id = i.location_id
+             LEFT JOIN users u ON u.id = i.cashier_id
+             LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+             LEFT JOIN books b ON b.id = ii.book_id
+             WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
+    params = list(ids)
+    if user["role"] == "distributor":
+        sql += " AND i.cashier_id = ?"
+        params.append(user["id"])
+    sql += " ORDER BY i.id DESC, ii.id"
+    return [dict(row) for row in db.execute(sql, params).fetchall()]
+
+
 @router.post("/invoices")
 def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     if not data.items:
