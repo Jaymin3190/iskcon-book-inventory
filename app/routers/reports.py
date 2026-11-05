@@ -150,7 +150,8 @@ def daily_zone_sales(days: int = 14, db=Depends(get_db), user=Depends(require_ro
 
     zone_ids = [zone["id"] for zone in zones]
     zone_placeholders = ",".join("?" * len(zone_ids))
-    start = (now_ist().date() - timedelta(days=days - 1)).isoformat()
+    today = now_ist().date()
+    start = (today - timedelta(days=days - 1)).isoformat()
     rows = db.execute(
         f"""WITH RECURSIVE tree(root_id, id) AS (
                 SELECT id, id FROM locations WHERE type = 'zone'
@@ -187,11 +188,22 @@ def daily_zone_sales(days: int = 14, db=Depends(get_db), user=Depends(require_ro
         entry["invoice_count"] += int(row["invoice_count"] or 0)
         zone_totals[row["zone_id"]] += units
 
+    # Include quiet days too so the table is a true daily series.
+    daily_rows = []
+    for offset in range(days):
+        day = (today - timedelta(days=offset)).isoformat()
+        daily_rows.append(by_day.get(day) or {
+            "date": day,
+            "total": 0,
+            "invoice_count": 0,
+            "zones": {},
+        })
+
     return {
         "days": days,
         "start": start,
         "zones": zones,
-        "rows": list(by_day.values()),
+        "rows": daily_rows,
         "totals": {str(zone_id): units for zone_id, units in zone_totals.items()},
         "total": sum(zone_totals.values()),
     }

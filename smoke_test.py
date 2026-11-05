@@ -322,6 +322,17 @@ _, sales = call("GET", "/api/reports/sales", token=super_t)
 check("sales report has rows", len(sales) >= 1)
 _, byb = call("GET", "/api/reports/sales-by-book", token=super_t)
 check("best sellers report", len(byb) >= 1 and byb[0]["revenue"] > 0)
+code, daily = call("GET", "/api/reports/daily-zone-sales", token=super_t)
+check("daily zone sales covers every zone",
+      code == 200 and len(daily["zones"]) == 6 and daily["total"] > 0, daily)
+check("daily zone totals add up",
+      daily["total"] == sum(daily["totals"].values())
+      and all(row["total"] == sum(row["zones"].values()) for row in daily["rows"]), daily)
+code, zone_daily = call("GET", "/api/reports/daily-zone-sales", token=zone_t)
+check("zone admin sees only own daily zone sales",
+      code == 200 and [zone["id"] for zone in zone_daily["zones"]] == [2], zone_daily)
+code, _ = call("GET", "/api/reports/daily-zone-sales", token=temple_t)
+check("temple user cannot view daily zone sales", code == 403)
 _, ssum = call("GET", "/api/reports/stock-summary", token=super_t)
 check("stock summary lists all 7 locations", len(ssum) == 7)
 _, trail = call("GET", "/api/audit", token=super_t)

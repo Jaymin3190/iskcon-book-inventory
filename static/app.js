@@ -438,7 +438,7 @@ function dailyZoneCard(data) {
       <h2>Daily books sold by zone</h2>
       <select aria-label="Daily sales period" onchange="setDailyZoneDays(this.value)">${periodOptions}</select>
     </div>
-    <p class="hint">Paid invoices grouped by IST sale date. The last column and bottom row are the sums across zones.</p>
+    <p class="hint">Paid invoices grouped by IST sale date; quiet days show zero. The last column and bottom row are the sums across zones.</p>
     <div class="table-scroll"><table class="daily-zone-table">
       <thead>${header}</thead>
       <tbody>${body}</tbody>
