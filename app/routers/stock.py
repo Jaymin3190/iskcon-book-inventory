@@ -4,16 +4,25 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..auth import has_role, require_roles
+from ..auth import require_roles
 from ..database import get_db
 from ..services.audit import log_audit
 from ..services.ledger import check_available, ensure_stock, move_stock
-from ..services.scope import can_view, location_ids, stock_location_ids
+from ..services.scope import can_view, location_ids, zone_location_ids, stock_location_ids
 from ..services.timezone import now_ist
 
 router = APIRouter(prefix="/api/stock", tags=["stock"])
 
 DAMAGED_REASON_CODES = ("DAMAGED", "STAINED", "MISSING_PAGES", "PRINT_ERROR", "OTHER")
+
+
+def _can_view_transfer(db, user, transfer) -> bool:
+    if user["role"] == "zone_admin":
+        return transfer["to_location_id"] in zone_location_ids(db, user["zone_id"])
+    return (
+        can_view(db, user, transfer["from_location_id"])
+        or can_view(db, user, transfer["to_location_id"])
+    )
 
 
 @router.get("")
@@ -261,6 +270,23 @@ class TransferIn(BaseModel):
 
 @router.get("/transfers")
 def list_transfers(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+    if user["role"] == "zone_admin":
+        ids = zone_location_ids(db, user["zone_id"])
+        sql = """SELECT t.*,
+                        f.code AS from_code, f.name AS from_name,
+                        to_l.code AS to_code, to_l.name AS to_name,
+                        ru.username AS requested_by_name,
+                        (SELECT COUNT(*) FROM transfer_items ti WHERE ti.transfer_id = t.id) AS item_count,
+                        (SELECT COALESCE(SUM(ti.qty),0) FROM transfer_items ti WHERE ti.transfer_id = t.id) AS units
+                 FROM transfers t
+                 JOIN locations f ON f.id = t.from_location_id
+                 JOIN locations to_l ON to_l.id = t.to_location_id
+                 LEFT JOIN users ru ON ru.id = t.requested_by
+                 WHERE t.to_location_id IN ({})
+                 ORDER BY t.id DESC""".format(",".join("?" * len(ids)))
+        return [
+            dict(r) for r in db.execute(sql, list(ids)).fetchall()
+        ]
     ids = location_ids(db, user)
     sql = """SELECT t.*,
                     f.code AS from_code, f.name AS from_name,
@@ -299,7 +325,7 @@ def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_role
     ).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
-    if not can_view(db, user, t["from_location_id"]) and not can_view(db, user, t["to_location_id"]):
+    if not _can_view_transfer(db, user, t):
         raise HTTPException(403, "Forbidden")
     items = db.execute(
         """SELECT ti.*, b.title, b.barcode, b.price
@@ -317,13 +343,13 @@ def delete_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_r
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
+    if not _can_view_transfer(db, user, t):
+        raise HTTPException(403, "Forbidden")
     if t["status"] not in ("requested", "rejected", "received"):
         raise HTTPException(409, "Cannot delete: transfer is already in progress or completed")
     if t["status"] == "received":
         if not can_view(db, user, t["from_location_id"]) or not can_view(db, user, t["to_location_id"]):
             raise HTTPException(403, "Forbidden")
-    elif not can_view(db, user, t["from_location_id"]) and not can_view(db, user, t["to_location_id"]):
-        raise HTTPException(403, "Forbidden")
 
     if t["status"] == "received":
         items = db.execute(
@@ -427,10 +453,10 @@ def approve_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
+    if not _can_view_transfer(db, user, t):
+        raise HTTPException(403, "Forbidden")
     if t["status"] != "requested":
         raise HTTPException(400, f"Cannot approve transfer in status '{t['status']}'")
-    if has_role(user, "zone_admin") and not (can_view(db, user, t["from_location_id"]) or can_view(db, user, t["to_location_id"])):
-        raise HTTPException(403, "Forbidden")
     db.execute(
         "UPDATE transfers SET status = 'approved', approved_by = ?, approved_at = datetime('now') WHERE id = ?",
         (user["id"], transfer_id),
@@ -445,10 +471,10 @@ def reject_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_r
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
+    if not _can_view_transfer(db, user, t):
+        raise HTTPException(403, "Forbidden")
     if t["status"] != "requested":
         raise HTTPException(400, f"Cannot reject transfer in status '{t['status']}'")
-    if has_role(user, "zone_admin") and not (can_view(db, user, t["from_location_id"]) or can_view(db, user, t["to_location_id"])):
-        raise HTTPException(403, "Forbidden")
     db.execute("UPDATE transfers SET status = 'rejected' WHERE id = ?", (transfer_id,))
     db.commit()
     log_audit(db, user["id"], "TRANSFER_REJECT", "transfers", transfer_id, t["request_number"], user["username"])
@@ -460,10 +486,12 @@ def dispatch_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
-    if t["status"] != "approved":
-        raise HTTPException(400, f"Cannot dispatch transfer in status '{t['status']}'")
+    if user["role"] == "zone_admin" and not _can_view_transfer(db, user, t):
+        raise HTTPException(403, "Forbidden")
     if user["role"] != "super_admin" and not can_view(db, user, t["from_location_id"]):
         raise HTTPException(403, "Forbidden")
+    if t["status"] != "approved":
+        raise HTTPException(400, f"Cannot dispatch transfer in status '{t['status']}'")
     source = db.execute(
         "SELECT type, parent_id FROM locations WHERE id = ?",
         (t["from_location_id"],),
@@ -497,10 +525,10 @@ def receive_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
-    if t["status"] != "dispatched":
-        raise HTTPException(400, f"Cannot receive transfer in status '{t['status']}'")
     if user["role"] != "super_admin" and not can_view(db, user, t["to_location_id"]):
         raise HTTPException(403, "Forbidden")
+    if t["status"] != "dispatched":
+        raise HTTPException(400, f"Cannot receive transfer in status '{t['status']}'")
     items = db.execute("SELECT * FROM transfer_items WHERE transfer_id = ?", (transfer_id,)).fetchall()
     for it in items:
         move_stock(db, it["book_id"], t["to_location_id"], it["qty"], "TRANSFER_IN", "transfers", transfer_id, user["id"], t["request_number"])
