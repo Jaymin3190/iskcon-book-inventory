@@ -1821,14 +1821,18 @@ function shareSavedInvoice(invoiceId) {
 
 function invoiceShareMeta(inv) {
   return {
-    invoiceId: inv.invoice_id ?? inv.id,
-    invoiceNumber: inv.invoice_number,
-    customerName: inv.customer_name || 'Customer',
-    customerPhone: inv.customer_phone,
+    invoiceId: inv.invoiceId ?? inv.invoice_id ?? inv.id,
+    invoiceNumber: inv.invoiceNumber ?? inv.invoice_number,
+    customerName: (inv.customerName ?? inv.customer_name) || 'Customer',
+    customerPhone: inv.customerPhone ?? inv.customer_phone,
     total: Number(inv.total),
     items: (inv.items || []).map(i => ({ title: i.title, qty: i.qty })),
   };
 }
+
+// Detail modals cache their invoice so Share can open WhatsApp immediately
+// from the click, without waiting on a network request first.
+const invoiceShareCache = {};
 
 function whatsappInvoiceMessage(meta) {
   const lines = [
@@ -1844,40 +1848,56 @@ function whatsappInvoiceMessage(meta) {
   return lines.join('\n');
 }
 
+function whatsappShareUrl(meta) {
+  const number = whatsappPhoneNumber(meta.customerPhone);
+  if (!number) throw new Error('This bill has no valid WhatsApp phone number');
+  return `https://wa.me/${number}?text=${encodeURIComponent(whatsappInvoiceMessage(meta))}`;
+}
+
+function openWhatsApp(url) {
+  const win = window.open(url, '_blank');
+  if (win) {
+    try { win.opener = null; win.focus(); } catch (_) {}
+    return;
+  }
+  // Popups can be blocked. Navigating the current tab still takes the user
+  // straight to the customer's chat instead of failing silently.
+  window.location.href = url;
+}
+
 async function shareInvoiceWhatsApp(invoiceOrId) {
-  // Reserve a tab inside the click gesture so it is not blocked after the
-  // invoice lookup finishes.
-  const popup = window.open('', '_blank');
-  try {
-    let meta = invoiceOrId && typeof invoiceOrId === 'object' ? invoiceOrId : null;
-    if (!meta) {
-      const invoiceId = invoiceOrId ?? state.lastInvoice?.invoiceId;
-      if (!invoiceId) throw new Error('Invoice details are not available');
-      meta = state.lastInvoice?.invoiceId === invoiceId ? state.lastInvoice : null;
-      if (!meta) meta = invoiceShareMeta(await api('/api/pos/invoices/' + invoiceId));
-    }
-    const number = whatsappPhoneNumber(meta.customerPhone);
-    if (!number) throw new Error('This bill has no valid WhatsApp phone number');
-    const url = `https://wa.me/${number}?text=${encodeURIComponent(whatsappInvoiceMessage(meta))}`;
-    if (popup) {
-      popup.location.href = url;
-      try { popup.opener = null; popup.focus(); } catch (_) {}
-    } else {
-      const win = window.open(url, '_blank');
-      if (!win) throw new Error('Allow pop-ups to open WhatsApp');
-      try { win.opener = null; win.focus(); } catch (_) {}
-    }
-    toast('Opening WhatsApp for ' + meta.customerName, 'success');
+  let meta = null;
+  if (invoiceOrId && typeof invoiceOrId === 'object') meta = invoiceShareMeta(invoiceOrId);
+  else if (invoiceOrId != null && state.lastInvoice?.invoiceId === invoiceOrId) meta = state.lastInvoice;
+  else if (invoiceOrId != null && invoiceShareCache[invoiceOrId]) meta = invoiceShareCache[invoiceOrId];
+
+  if (!meta) {
+    const invoiceId = invoiceOrId ?? state.lastInvoice?.invoiceId;
+    if (!invoiceId) { toast('Invoice details are not available', 'error'); return; }
     try {
-      const blob = await fetchInvoicePdf(meta.invoiceId);
-      savePdfFile(blob, meta.invoiceId);
-      toast('Invoice PDF saved. Attach it in the WhatsApp chat.', 'info');
-    } catch (_) {
-      toast('Opening WhatsApp, but the PDF could not be prepared. Use Save to download it.', 'error');
+      meta = invoiceShareMeta(await api('/api/pos/invoices/' + invoiceId));
+    } catch (e) {
+      toast(e.message, 'error');
+      return;
     }
+  }
+
+  let url;
+  try {
+    url = whatsappShareUrl(meta);
   } catch (e) {
-    if (popup) { try { popup.close(); } catch (_) {} }
     toast(e.message, 'error');
+    return;
+  }
+
+  openWhatsApp(url);
+  toast('Opening WhatsApp for ' + meta.customerName, 'success');
+  try {
+    const blob = await fetchInvoicePdf(meta.invoiceId);
+    savePdfFile(blob, meta.invoiceId);
+    toast('Invoice PDF saved. Attach it in the WhatsApp chat.', 'info');
+  } catch (_) {
+    toast('Opening WhatsApp, but the PDF could not be prepared. Use Save to download it.', 'error');
   }
 }
 
@@ -2045,6 +2065,7 @@ async function invoiceDetail(invoiceId) {
   let inv;
   try { inv = await api('/api/pos/invoices/' + invoiceId); }
   catch (e) { toast(e.message, 'error'); return; }
+  invoiceShareCache[inv.id] = invoiceShareMeta(inv);
   const paid = inv.status === 'paid';
   openModal(`<h3>Invoice ${esc(inv.invoice_number)}</h3>
     <div class="table-scroll"><table>
