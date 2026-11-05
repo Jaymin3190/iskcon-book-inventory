@@ -71,8 +71,15 @@ def validate_zone(db, zone_id: Optional[int]) -> None:
         raise HTTPException(400, "A valid zone is required for every role except super admin")
 
 
+def _authorize_user_management(target, user) -> None:
+    if user["role"] == "zone_admin" and (
+        target["role"] != "distributor" or target["zone_id"] != user["zone_id"]
+    ):
+        raise HTTPException(403, "Zone admins can only manage distributors in their own zone")
+
+
 @router.post("")
-def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
+def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
     if data.role not in VALID_ROLES:
         raise HTTPException(400, "Invalid role")
     if not data.password:
@@ -80,17 +87,25 @@ def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("su
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
     username = clean_username(data.username)
-    if data.role != "super_admin" and not data.zone_id:
+    if user["role"] == "zone_admin":
+        if data.role != "distributor":
+            raise HTTPException(403, "Zone admins can only create distributors in their zone")
+        if not user["zone_id"] or data.zone_id not in (None, user["zone_id"]):
+            raise HTTPException(403, "Zone admins can only create users in their own zone")
+        zone_id = user["zone_id"]
+    else:
+        zone_id = data.zone_id
+    if data.role != "super_admin" and not zone_id:
         raise HTTPException(400, "A zone is required for every role except super admin")
     if data.role != "super_admin":
-        validate_zone(db, data.zone_id)
+        validate_zone(db, zone_id)
     existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
     if existing:
         raise HTTPException(409, "Username already exists")
     cur = db.execute(
         """INSERT INTO users (username, password_hash, name, role, zone_id, is_active)
            VALUES (?,?,?,?,?,?)""",
-        (username, hash_password(data.password), data.name, data.role, data.zone_id, data.is_active),
+        (username, hash_password(data.password), data.name, data.role, zone_id, data.is_active),
     )
     db.commit()
     log_audit(db, user["id"], "USER_CREATE", "user", cur.lastrowid, username, user["username"])
@@ -98,11 +113,15 @@ def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("su
 
 
 @router.patch("/{user_id}")
-def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
+def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
     row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if not row:
         raise HTTPException(404, "User not found")
     provided = data.model_fields_set
+    if user["role"] == "zone_admin":
+        _authorize_user_management(row, user)
+        if "role" in provided or "zone_id" in provided:
+            raise HTTPException(403, "Zone admins cannot change a user's role or zone")
     fields = []
     values = []
     if data.username is not None:
@@ -173,12 +192,14 @@ def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(
 
 
 @router.delete("/{user_id}")
-def delete_user(user_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
-    if user_id == user["id"]:
-        raise HTTPException(400, "Cannot delete your own account")
+def delete_user(user_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
     target = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if not target:
         raise HTTPException(404, "User not found")
+    if user["role"] == "super_admin" and user_id == user["id"]:
+        raise HTTPException(400, "Cannot delete your own account")
+    if user["role"] == "zone_admin":
+        _authorize_user_management(target, user)
     if target["role"] == "super_admin":
         n = db.execute(
             "SELECT COUNT(*) AS n FROM users WHERE role = 'super_admin' AND is_active = 1"

@@ -2715,45 +2715,55 @@ async function users() {
   const rows = await api('/api/users');
   state.users = rows;
   const canEdit = state.user.role === 'super_admin';
+  const canCreate = hasAnyRole('super_admin', 'zone_admin');
+  const canManageUsers = hasAnyRole('super_admin', 'zone_admin');
   document.getElementById('content').innerHTML = `
     <div class="card">
-      <div class="toolbar">${canEdit ? '<button class="primary" onclick="userForm()">+ New user</button>' : ''}</div>
+      <div class="toolbar">${canCreate ? '<button class="primary" onclick="userForm()">+ New user</button>' : ''}</div>
       <table>
-        <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Active</th>${canEdit ? '<th>Actions</th>' : ''}</tr>
+        <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Active</th>${canManageUsers ? '<th>Actions</th>' : ''}</tr>
         ${rows.map(u => `<tr class="clickable-row" onclick="rowOpen(event, 'userRowOpen', ${u.id})">
           <td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
           <td>${esc(u.zone_name || '')}</td><td>${u.is_active ? 'Yes' : 'No'}</td>
-          ${canEdit ? `<td>
-            <button class="action" onclick="userForm(${u.id})">Edit</button>
-            <button class="action" onclick="userToggle(${u.id})">${u.is_active ? 'Disable' : 'Enable'}</button>
-            <button class="danger" onclick="userDelete(${u.id})">Delete</button>
-          </td>` : ''}
-        </tr>`).join('') || `<tr><td colspan="${canEdit ? 6 : 5}" class="hint">No users found.</td></tr>`}
+          ${canManageUsers ? `<td>${canEdit || (u.role === 'distributor' && u.zone_id === state.user.zone_id) ? `
+            <button class="action" onclick="event.stopPropagation(); userForm(${u.id})">Edit</button>
+            <button class="action" onclick="event.stopPropagation(); userToggle(${u.id})">${u.is_active ? 'Disable' : 'Enable'}</button>
+            <button class="danger" onclick="event.stopPropagation(); userDelete(${u.id})">Delete</button>
+          ` : ''}</td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${canManageUsers ? 6 : 5}" class="hint">No users found.</td></tr>`}
       </table>
     </div>`;
 }
 
 async function userForm(userId = null) {
+  const zoneAdmin = hasRole('zone_admin');
   const u = userId ? (state.users || []).find(x => x.id === userId) : null;
-  const locs = await api('/api/locations');
-  const zones = locs.filter(l => l.type === 'zone');
-  const r = u?.role || 'temple';
+  if (zoneAdmin && userId && (!u || u.role !== 'distributor' || u.zone_id !== state.user.zone_id)) {
+    toast('Zone admins can only manage distributors in their own zone', 'error');
+    return;
+  }
+  const zones = zoneAdmin
+    ? [{ id: state.user.zone_id, name: state.user.zone_name }]
+    : (await api('/api/locations')).filter(l => l.type === 'zone');
+  const r = u?.role || (zoneAdmin ? 'distributor' : 'temple');
   openModal(`<h3>${u ? 'Edit user — ' + esc(u.username) : 'New user'}</h3>
     <div class="form-grid">
       <div class="form-row"><label>Username *</label><input id="uUser" value="${esc(u?.username || '')}" autocomplete="off"></div>
       <div class="form-row"><label>Password ${u ? '(leave blank to keep)' : '*'}</label><input id="uPass" type="password" autocomplete="new-password" placeholder="${u ? 'Set a new password' : ''}"></div>
       <div class="form-row"><label>Name *</label><input id="uName" value="${esc(u?.name || '')}"></div>
-      <div class="form-row"><label>Role</label>
+      ${zoneAdmin ? '<div class="form-row"><label>Role</label><input value="Distributor" readonly></div>' : `<div class="form-row"><label>Role</label>
         <select id="uRole">
           <option value="super_admin" ${r === 'super_admin' ? 'selected' : ''}>Super Admin</option>
           <option value="zone_admin" ${r === 'zone_admin' ? 'selected' : ''}>Zone Admin</option>
           <option value="distributor" ${r === 'distributor' ? 'selected' : ''}>Distributor</option>
           <option value="temple" ${r === 'temple' ? 'selected' : ''}>Temple / Store</option>
         </select>
-      </div>
-      <div class="form-row"><label>Zone *</label>
-        <select id="uZone"><option value="">— none —</option>${zones.map(z => `<option value="${z.id}" ${String(u?.zone_id) === String(z.id) ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}</select>
-      </div>
+      </div>`}
+      ${zoneAdmin
+        ? `<div class="form-row"><label>Zone</label><input value="${esc(state.user.zone_name || '')}" readonly></div>`
+        : `<div class="form-row"><label>Zone *</label>
+          <select id="uZone"><option value="">— none —</option>${zones.map(z => `<option value="${z.id}" ${String(u?.zone_id) === String(z.id) ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}</select>
+        </div>`}
       <div class="form-row"><label>Active</label>
         <select id="uActive"><option value="1" ${u?.is_active !== 0 ? 'selected' : ''}>Yes</option><option value="0" ${u?.is_active === 0 ? 'selected' : ''}>No</option></select>
       </div>
@@ -2762,8 +2772,13 @@ async function userForm(userId = null) {
 }
 
 function userRowOpen(userId) {
-  if (state.user.role === 'super_admin') userForm(userId);
-  else userDetail(userId);
+  const u = (state.users || []).find(x => x.id === userId);
+  if (state.user.role === 'super_admin' ||
+      (state.user.role === 'zone_admin' && u?.role === 'distributor' && u.zone_id === state.user.zone_id)) {
+    userForm(userId);
+  } else {
+    userDetail(userId);
+  }
 }
 
 function userDetail(userId) {
@@ -2780,7 +2795,8 @@ function userDetail(userId) {
 }
 
 async function userSave(userId) {
-  const role = document.getElementById('uRole').value;
+  const zoneAdmin = hasRole('zone_admin');
+  const role = zoneAdmin ? 'distributor' : document.getElementById('uRole').value;
   const password = document.getElementById('uPass').value;
   const username = document.getElementById('uUser').value.trim();
   if (!username) { toast('Username is required', 'error'); return; }
@@ -2788,10 +2804,13 @@ async function userSave(userId) {
   const body = {
     username,
     name: document.getElementById('uName').value.trim(),
-    role,
-    zone_id: role === 'super_admin' ? null : (Number(document.getElementById('uZone').value) || null),
     is_active: Number(document.getElementById('uActive').value),
   };
+  if (!zoneAdmin || !userId) {
+    body.role = role;
+    body.zone_id = zoneAdmin ? state.user.zone_id :
+      (role === 'super_admin' ? null : (Number(document.getElementById('uZone').value) || null));
+  }
   if (password) body.password = password;
   if (!body.name) { toast('Name is required', 'error'); return; }
   try {
