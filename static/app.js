@@ -1791,7 +1791,7 @@ async function checkout() {
 function showSavedInvoice(invoice, detail) {
   openModal(`<h3>Invoice saved</h3>
     <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
-    <p class="hint">${esc(detail)}. Share opens the customer's WhatsApp chat with the bill details and saves the invoice PDF so you can attach it there. Save downloads the PDF again.</p>
+    <p class="hint">${esc(detail)}. Share sends the invoice PDF through your device's share sheet so you can attach it in WhatsApp. If file sharing is unavailable, it opens the WhatsApp chat and saves the PDF to attach manually. Save downloads the PDF again.</p>
     <div class="toolbar">
       <button class="primary" onclick="shareSavedInvoice(${invoice.invoice_id})">Share</button>
       <button id="saveInvoiceButton" class="action" disabled onclick="downloadInvoicePdf(${invoice.invoice_id})">Save</button>
@@ -1814,9 +1814,8 @@ function finishSavedInvoice() {
 }
 
 function shareSavedInvoice(invoiceId) {
-  // Open the customer's chat directly and download the PDF so it can be
-  // attached. WhatsApp links cannot attach files themselves.
-  shareInvoiceWhatsApp(invoiceId);
+  // Attach the invoice PDF through the device share sheet when supported.
+  shareInvoice(invoiceId);
 }
 
 function invoiceShareMeta(inv) {
@@ -1830,8 +1829,8 @@ function invoiceShareMeta(inv) {
   };
 }
 
-// Detail modals cache their invoice so Share can open WhatsApp immediately
-// from the click, without waiting on a network request first.
+// Detail modals cache their invoice so Share can prepare the PDF without an
+// extra invoice lookup.
 const invoiceShareCache = {};
 
 function whatsappInvoiceMessage(meta) {
@@ -1865,39 +1864,53 @@ function openWhatsApp(url) {
   window.location.href = url;
 }
 
-async function shareInvoiceWhatsApp(invoiceOrId) {
-  let meta = null;
-  if (invoiceOrId && typeof invoiceOrId === 'object') meta = invoiceShareMeta(invoiceOrId);
-  else if (invoiceOrId != null && state.lastInvoice?.invoiceId === invoiceOrId) meta = state.lastInvoice;
-  else if (invoiceOrId != null && invoiceShareCache[invoiceOrId]) meta = invoiceShareCache[invoiceOrId];
+async function resolveInvoiceShareMeta(invoiceOrId) {
+  if (invoiceOrId && typeof invoiceOrId === 'object') return invoiceShareMeta(invoiceOrId);
+  if (invoiceOrId != null && state.lastInvoice?.invoiceId === invoiceOrId) return state.lastInvoice;
+  if (invoiceOrId != null && invoiceShareCache[invoiceOrId]) return invoiceShareCache[invoiceOrId];
 
-  if (!meta) {
-    const invoiceId = invoiceOrId ?? state.lastInvoice?.invoiceId;
-    if (!invoiceId) { toast('Invoice details are not available', 'error'); return; }
-    try {
-      meta = invoiceShareMeta(await api('/api/pos/invoices/' + invoiceId));
-    } catch (e) {
-      toast(e.message, 'error');
-      return;
-    }
-  }
+  const invoiceId = invoiceOrId ?? state.lastInvoice?.invoiceId;
+  if (!invoiceId) throw new Error('Invoice details are not available');
+  return invoiceShareMeta(await api('/api/pos/invoices/' + invoiceId));
+}
 
-  let url;
+async function shareInvoice(invoiceOrId) {
+  let meta;
+  let blob;
   try {
-    url = whatsappShareUrl(meta);
+    meta = await resolveInvoiceShareMeta(invoiceOrId);
+    blob = await fetchInvoicePdf(meta.invoiceId);
   } catch (e) {
     toast(e.message, 'error');
     return;
   }
 
-  openWhatsApp(url);
-  toast('Opening WhatsApp for ' + meta.customerName, 'success');
+  const file = typeof File === 'undefined' ? null
+    : new File([blob], `invoice-${meta.invoiceNumber || meta.invoiceId}.pdf`, { type: 'application/pdf' });
+  if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({
+        files: [file],
+        title: `Invoice ${meta.invoiceNumber || meta.invoiceId}`,
+        text: whatsappInvoiceMessage(meta),
+      });
+      toast('Invoice PDF shared', 'success');
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      // Device share failed; fall back to opening the chat and saving the PDF.
+    }
+  }
+
+  // Fallback for browsers without file sharing: open the customer's chat and
+  // save the PDF so it can be attached. WhatsApp links cannot attach files.
   try {
-    const blob = await fetchInvoicePdf(meta.invoiceId);
+    openWhatsApp(whatsappShareUrl(meta));
+    toast('Opening WhatsApp for ' + meta.customerName, 'success');
     savePdfFile(blob, meta.invoiceId);
     toast('Invoice PDF saved. Attach it in the WhatsApp chat.', 'info');
-  } catch (_) {
-    toast('Opening WhatsApp, but the PDF could not be prepared. Use Save to download it.', 'error');
+  } catch (e) {
+    toast(e.message, 'error');
   }
 }
 
@@ -1946,37 +1959,6 @@ async function downloadInvoicePdf(invoiceId) {
     savePdfFile(file, invoiceId);
     toast('Invoice PDF downloaded', 'success');
   } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-async function shareInvoicePdf(invoiceId) {
-  try {
-    const cached = state.invoicePdf?.invoiceId === invoiceId ? state.invoicePdf.file : null;
-    if (cached && typeof File !== 'undefined') {
-      const cachedFile = new File([cached], `invoice-${invoiceId}.pdf`, { type: 'application/pdf' });
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [cachedFile] })) {
-        await navigator.share({
-          files: [cachedFile],
-          title: `Invoice ${invoiceId}`,
-          text: 'Thank you for your purchase. Please find the invoice attached.',
-        });
-        toast('Invoice shared', 'success');
-        return;
-      }
-    }
-
-    const blob = cached || await fetchInvoicePdf(invoiceId);
-    const file = typeof File === 'undefined' ? null : new File([blob], `invoice-${invoiceId}.pdf`, { type: 'application/pdf' });
-    if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: `Invoice ${invoiceId}`, text: 'Thank you for your purchase. Please find the invoice attached.' });
-      toast('Invoice shared', 'success');
-      return;
-    }
-    savePdfFile(blob, invoiceId);
-    toast('PDF downloaded. This browser cannot share attachments directly.', 'info');
-  } catch (e) {
-    if (e.name === 'AbortError') return;
     toast(e.message, 'error');
   }
 }
@@ -2067,6 +2049,9 @@ async function invoiceDetail(invoiceId) {
   catch (e) { toast(e.message, 'error'); return; }
   invoiceShareCache[inv.id] = invoiceShareMeta(inv);
   const paid = inv.status === 'paid';
+  // Preload the PDF so Share can open the native share sheet immediately from
+  // the click; mobile browsers require that user activation.
+  if (paid) fetchInvoicePdf(inv.id).catch(() => {});
   openModal(`<h3>Invoice ${esc(inv.invoice_number)}</h3>
     <div class="table-scroll"><table>
       <tr><th>Date</th><td>${esc(formatAuditTime(inv.created_at))}</td></tr>
@@ -2084,7 +2069,7 @@ async function invoiceDetail(invoiceId) {
     <p><strong>Total:</strong> &#8377;${Number(inv.total).toFixed(2)}</p>
     <div class="toolbar" style="margin-top:14px">
       ${paid ? `<button class="action" onclick="downloadInvoicePdf(${inv.id})">PDF</button>` : ''}
-      ${paid ? `<button class="action" onclick="shareInvoiceWhatsApp(${inv.id})">Share</button>` : ''}
+      ${paid ? `<button class="action" onclick="shareInvoice(${inv.id})">Share</button>` : ''}
       ${paid && state.user.role === 'super_admin' ? `<button class="action" onclick="invoiceEdit(${inv.id})">Edit</button>` : ''}
       ${inv.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${inv.id})">Check payment</button>` : ''}
       <button class="action" onclick="invoiceList()">Back</button>
