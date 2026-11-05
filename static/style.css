@@ -313,6 +313,13 @@ table tr[hidden] { display: none !important; }
   .zone-table th:nth-child(9) { width: 11%; }
 }
 
+.daily-zone-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.daily-zone-head h2 { margin: 0; }
+.daily-zone-table th, .daily-zone-table td { text-align: right; }
+.daily-zone-table th:first-child, .daily-zone-table td:first-child { text-align: left; white-space: nowrap; }
+.daily-zone-table tfoot td { background: #f7f1e1; font-weight: 600; border-top: 2px solid #e3d6ba; }
+.daily-zone-table tr.daily-zone-total:hover td { background: #f7f1e1; }
+
 #modalBackdrop {
   position: fixed; inset: 0; background: rgba(30,20,5,.55);
   display: flex; align-items: center; justify-content: center; z-index: 50;

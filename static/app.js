@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], stockRows: [], damagedRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], stockRows: [], damagedRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null, dailyZoneDays: 14 };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -78,6 +78,7 @@ function isTableHeaderRow(row) {
 
 function tableFilterRows(table) {
   return [...table.rows].filter(row =>
+    (!row.parentElement || row.parentElement.tagName !== 'TFOOT') &&
     !isTableHeaderRow(row) &&
     !(row.cells.length === 1 && row.cells[0].classList.contains('hint'))
   );
@@ -330,9 +331,10 @@ async function pageScanStrip(onScan, placeholder = 'Scan barcode / ISBN, press E
 
 async function dashboard() {
   const canViewZones = hasAnyRole('super_admin', 'zone_admin');
-  const [stock, sales, tf, zones] = await Promise.all([
+  const [stock, sales, tf, zones, dailyZones] = await Promise.all([
     api('/api/reports/stock-summary'), api('/api/reports/sales'), api('/api/reports/transfers'),
     canViewZones ? api('/api/reports/zones') : Promise.resolve([]),
+    canViewZones ? api('/api/reports/daily-zone-sales?days=' + state.dailyZoneDays) : Promise.resolve(null),
   ]);
   state.zones = zones;
   const totalUnits = stock.reduce((a, s) => a + (s.total_units || 0), 0);
@@ -377,6 +379,7 @@ async function dashboard() {
       <div class="stat"><div class="num">&#8377;${revenue.toFixed(0)}</div><div class="lbl">Sales revenue</div></div>
       <div class="stat"><div class="num">${open}</div><div class="lbl">Open transfer requests</div></div>
     </div>
+    ${dailyZoneCard(dailyZones)}
     ${zoneHtml}
     <div class="card stock-summary-card"><h2>Stock summary by location</h2><p class="hint">Select a location to see every book and its stock.</p>
       <table class="stock-summary-table"><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
@@ -393,6 +396,55 @@ async function dashboard() {
         ${tf.map(t => `<tr class="summary-clickable-row" data-status="${esc(t.status)}" onclick="showTransferStatusDetails(this.dataset.status)" title="Click to view transfers and books"><td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td><td>${t.n}</td></tr>`).join('')}
       </table>
     </div>`;
+}
+
+function formatDailyZoneDate(value) {
+  const [year, month, day] = String(value).split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return new Date(year, month - 1, day)
+    .toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function setDailyZoneDays(value) {
+  const days = Number(value);
+  state.dailyZoneDays = Number.isFinite(days) && days > 0 ? days : 14;
+  return dashboard();
+}
+
+function dailyZoneCard(data) {
+  if (!data || !data.zones || !data.zones.length) return '';
+  const zones = data.zones;
+  const rows = data.rows || [];
+  const totals = data.totals || {};
+  const zoneValue = (values, zoneId) => Number(values?.[zoneId] ?? values?.[String(zoneId)] ?? 0);
+  const periodOptions = [7, 14, 30, 90].map(days =>
+    `<option value="${days}"${Number(data.days) === days ? ' selected' : ''}>Last ${days} days</option>`
+  ).join('');
+  const header = `<tr><th>Date</th>${zones.map(zone =>
+    `<th title="${esc(zone.code)}">${esc(zone.name)}</th>`
+  ).join('')}<th>Total</th></tr>`;
+  const body = rows.map(row => `<tr>
+      <td>${esc(formatDailyZoneDate(row.date))}</td>
+      ${zones.map(zone => `<td>${zoneValue(row.zones, zone.id)}</td>`).join('')}
+      <td><strong>${Number(row.total || 0)}</strong></td>
+    </tr>`).join('') || `<tr><td colspan="${zones.length + 2}" class="hint">No books sold in the last ${Number(data.days)} days.</td></tr>`;
+  const footer = `<tr class="daily-zone-total">
+      <td>Total</td>
+      ${zones.map(zone => `<td>${zoneValue(totals, zone.id)}</td>`).join('')}
+      <td>${Number(data.total || 0)}</td>
+    </tr>`;
+  return `<div class="card daily-zone-card">
+    <div class="daily-zone-head">
+      <h2>Daily books sold by zone</h2>
+      <select aria-label="Daily sales period" onchange="setDailyZoneDays(this.value)">${periodOptions}</select>
+    </div>
+    <p class="hint">Paid invoices grouped by IST sale date. The last column and bottom row are the sums across zones.</p>
+    <div class="table-scroll"><table class="daily-zone-table">
+      <thead>${header}</thead>
+      <tbody>${body}</tbody>
+      <tfoot>${footer}</tfoot>
+    </table></div>
+  </div>`;
 }
 
 async function showLocationStock(locationId) {

@@ -1,9 +1,12 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import has_role, require_roles
 from ..database import get_db
 from ..services.scope import invoice_location_ids, location_ids, stock_location_ids, zone_location_ids
+from ..services.timezone import now_ist
 
 router = APIRouter(tags=["reports"])
 
@@ -125,6 +128,72 @@ def stock_summary_books(location_id: int, db=Depends(get_db), user=Depends(requi
     return {
         "location": dict(location),
         "books": [dict(row) for row in books],
+    }
+
+
+@router.get("/api/reports/daily-zone-sales")
+def daily_zone_sales(days: int = 14, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+    """Books sold per IST day, broken down by zone, with totals."""
+    days = max(1, min(days, 366))
+    ids = location_ids(db, user)
+    placeholders = ",".join("?" * len(ids))
+    zones = [
+        dict(row) for row in db.execute(
+            f"""SELECT id, code, name FROM locations
+                WHERE type = 'zone' AND id IN ({placeholders})
+                ORDER BY name""",
+            list(ids),
+        ).fetchall()
+    ]
+    if not zones:
+        return {"days": days, "start": None, "zones": [], "rows": [], "totals": {}, "total": 0}
+
+    zone_ids = [zone["id"] for zone in zones]
+    zone_placeholders = ",".join("?" * len(zone_ids))
+    start = (now_ist().date() - timedelta(days=days - 1)).isoformat()
+    rows = db.execute(
+        f"""WITH RECURSIVE tree(root_id, id) AS (
+                SELECT id, id FROM locations WHERE type = 'zone'
+                UNION ALL
+                SELECT t.root_id, c.id FROM locations c JOIN tree t ON c.parent_id = t.id
+            )
+            SELECT date(i.created_at, '+5 hours', '+30 minutes') AS day,
+                   t.root_id AS zone_id,
+                   COALESCE(SUM(ii.qty), 0) AS units,
+                   COUNT(DISTINCT i.id) AS invoice_count
+              FROM invoices i
+              JOIN tree t ON t.id = i.location_id
+              JOIN invoice_items ii ON ii.invoice_id = i.id
+             WHERE i.status = 'paid'
+               AND t.root_id IN ({zone_placeholders})
+               AND date(i.created_at, '+5 hours', '+30 minutes') >= ?
+             GROUP BY day, t.root_id
+             ORDER BY day DESC, t.root_id""",
+        zone_ids + [start],
+    ).fetchall()
+
+    by_day = {}
+    zone_totals = {zone["id"]: 0 for zone in zones}
+    for row in rows:
+        entry = by_day.setdefault(row["day"], {
+            "date": row["day"],
+            "total": 0,
+            "invoice_count": 0,
+            "zones": {},
+        })
+        units = int(row["units"] or 0)
+        entry["zones"][str(row["zone_id"])] = units
+        entry["total"] += units
+        entry["invoice_count"] += int(row["invoice_count"] or 0)
+        zone_totals[row["zone_id"]] += units
+
+    return {
+        "days": days,
+        "start": start,
+        "zones": zones,
+        "rows": list(by_day.values()),
+        "totals": {str(zone_id): units for zone_id, units in zone_totals.items()},
+        "total": sum(zone_totals.values()),
     }
 
 
