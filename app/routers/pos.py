@@ -48,6 +48,7 @@ class InvoiceItemIn(BaseModel):
 
 class InvoiceIn(BaseModel):
     location_id: Optional[int] = None
+    distributor_id: Optional[int] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     payment_mode: str = "cash"
@@ -140,6 +141,20 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     if not loc_id or loc_id not in location_ids(db, user):
         raise HTTPException(400, "You have no billing location")
     loc = db.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
+    distributor_id = None
+    if data.distributor_id is not None:
+        if user["role"] != "super_admin":
+            raise HTTPException(403, "Only a super admin can assign a sale to a distributor")
+        distributor = db.execute(
+            """SELECT id, zone_id FROM users
+               WHERE id = ? AND role = 'distributor' AND is_active = 1""",
+            (data.distributor_id,),
+        ).fetchone()
+        if loc["type"] != "warehouse":
+            raise HTTPException(400, "Distributor attribution is only available for warehouse sales")
+        if not distributor:
+            raise HTTPException(400, "Select an active distributor")
+        distributor_id = distributor["id"]
 
     resolved_by_book = {}
     for it in data.items:
@@ -172,10 +187,12 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         share_token = secrets.token_urlsafe(24)
         cur = db.execute(
             """INSERT INTO invoices (invoice_number, share_token, location_id, customer_name, customer_phone,
-                                     payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                     payment_mode, payment_ref, status, subtotal, discount, total, cashier_id,
+                                     distributor_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (num, share_token, loc_id, customer_name, customer_phone,
-             stored_payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"]),
+             stored_payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"],
+             distributor_id),
         )
         iid = cur.lastrowid
         for book, q in resolved:
@@ -231,10 +248,12 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
 @router.get("/invoices/{invoice_id}")
 def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
-        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+        """SELECT i.*, l.code AS location_code, l.name AS location_name,
+                  u.name AS cashier_name, d.name AS distributor_name
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
+           LEFT JOIN users d ON d.id = i.distributor_id
            WHERE i.id = ?""",
         (invoice_id,),
     ).fetchone()
@@ -390,10 +409,12 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
     )
 
     updated = db.execute(
-        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+        """SELECT i.*, l.code AS location_code, l.name AS location_name,
+                  u.name AS cashier_name, d.name AS distributor_name
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
+           LEFT JOIN users d ON d.id = i.distributor_id
            WHERE i.id = ?""",
         (invoice_id,),
     ).fetchone()
@@ -458,7 +479,7 @@ def invoice_html(inv, items, pdf_url=None):
     rows_html = "".join(rows)
     customer_name = escape(str(inv["customer_name"] or "-"))
     customer_phone = escape(str(inv["customer_phone"] or "-"))
-    distributor = escape(str(inv["cashier_name"] or "-"))
+    distributor = escape(str(inv["distributor_name"] or inv["cashier_name"] or "-"))
     invoice_number = escape(str(inv["invoice_number"]))
     date = invoice_date_ist(inv["created_at"])
     payment_ref = escape(str(inv["payment_ref"] or ""))
@@ -537,10 +558,12 @@ def invoice_html(inv, items, pdf_url=None):
 @router.get("/invoices/{invoice_id}/print", response_class=HTMLResponse)
 def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
-        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+        """SELECT i.*, l.code AS location_code, l.name AS location_name,
+                  u.name AS cashier_name, d.name AS distributor_name
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
+           LEFT JOIN users d ON d.id = i.distributor_id
            WHERE i.id = ?""",
         (invoice_id,),
     ).fetchone()
@@ -564,10 +587,12 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
 @router.get("/invoices/{invoice_id}/pdf")
 def download_invoice_pdf(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
-        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+        """SELECT i.*, l.code AS location_code, l.name AS location_name,
+                  u.name AS cashier_name, d.name AS distributor_name
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
+           LEFT JOIN users d ON d.id = i.distributor_id
            WHERE i.id = ?""",
         (invoice_id,),
     ).fetchone()

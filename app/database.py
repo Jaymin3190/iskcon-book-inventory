@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     discount NUMERIC NOT NULL DEFAULT 0,
     total NUMERIC NOT NULL DEFAULT 0,
     cashier_id INTEGER REFERENCES users(id),
+    distributor_id INTEGER REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -289,6 +290,15 @@ def _migrate_invoice_share_tokens(conn):
     )
 
 
+def _migrate_invoice_distributor(conn):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(invoices)")}
+    if "distributor_id" not in columns:
+        conn.execute("ALTER TABLE invoices ADD COLUMN distributor_id INTEGER REFERENCES users(id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invoices_distributor_id ON invoices(distributor_id)"
+    )
+
+
 def _migrate_transfer_numbers(conn):
     """Use short, human-friendly request numbers such as TRF-0001."""
     for row in conn.execute("SELECT id, request_number FROM transfers").fetchall():
@@ -307,6 +317,7 @@ def init_db():
     _migrate_users_zone_only(conn)
     _migrate_razorpay(conn)
     _migrate_invoice_share_tokens(conn)
+    _migrate_invoice_distributor(conn)
     _migrate_transfer_numbers(conn)
     conn.commit()
     conn.close()

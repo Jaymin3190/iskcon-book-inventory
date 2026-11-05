@@ -5,10 +5,14 @@ from fastapi import HTTPException
 
 from app.database import SCHEMA
 from app.routers.reports import (
+    distributor_details,
+    distributor_sales_report,
+    distributors_report,
     sales_by_book,
     stock_summary_books,
     transfer_status_details,
     transfers_report,
+    zone_overview,
 )
 
 
@@ -26,6 +30,10 @@ class ReportDetailsTests(unittest.TestCase):
                 (2, "ZONE-A", "Zone A", "zone", 1),
                 (3, "ZONE-B", "Zone B", "zone", 1),
             ],
+        )
+        self.db.execute(
+            """INSERT INTO users (id, username, password_hash, name, role, zone_id)
+               VALUES (1, 'dist-a', 'not-used', 'Distributor A', 'distributor', 2)"""
         )
         self.db.executemany(
             """INSERT INTO books (id, title, barcode, price)
@@ -55,6 +63,18 @@ class ReportDetailsTests(unittest.TestCase):
                 (1, 1, 2, 100, 200),
                 (2, 2, 1, 300, 300),
             ],
+        )
+        self.db.execute("UPDATE invoices SET cashier_id = 1 WHERE id = 1")
+        self.db.execute(
+            """INSERT INTO invoices
+                   (id, invoice_number, location_id, payment_mode, subtotal, discount, total,
+                    status, distributor_id)
+               VALUES (3, 'INV-GODOWN', 1, 'cash', 900, 0, 900, 'paid', 1)"""
+        )
+        self.db.execute(
+            """INSERT INTO invoice_items
+                   (invoice_id, book_id, qty, unit_price, line_total)
+               VALUES (3, 1, 9, 100, 900)"""
         )
         self.db.executemany(
             """INSERT INTO transfers
@@ -116,6 +136,21 @@ class ReportDetailsTests(unittest.TestCase):
 
         self.assertEqual(details["transfer_count"], 2)
         self.assertEqual(details["total_units"], 15)
+
+    def test_godown_sale_is_attributed_to_selected_distributor_and_zone(self):
+        distributors = distributors_report(db=self.db, user=self.super_admin)
+        details = distributor_details(1, db=self.db, user=self.super_admin)
+        zones = {row["id"]: row for row in zone_overview(db=self.db, user=self.super_admin)}
+
+        self.assertEqual(distributors[0]["books_sold"], 11)
+        self.assertEqual(details["summary"]["books_sold"], 11)
+        self.assertEqual(details["books"][0]["qty"], 11)
+        self.assertEqual(zones[2]["books_sold"], 2)
+        self.assertEqual(len(distributor_sales_report(db=self.db, user=self.super_admin)), 2)
+
+        zone_admin = {"role": "zone_admin", "zone_id": 2}
+        zone_sales = distributor_sales_report(db=self.db, user=zone_admin)
+        self.assertEqual([sale["invoice_number"] for sale in zone_sales], ["INV-A"])
 
 
 if __name__ == "__main__":

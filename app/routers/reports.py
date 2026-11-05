@@ -72,7 +72,10 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
                          ELSE i.payment_mode END AS payment_mode,
                     ii.line_total AS amount
              FROM invoices i
-             JOIN users u ON u.id = i.cashier_id AND u.role = 'distributor'
+             JOIN users u ON u.id = COALESCE(i.distributor_id,
+                    CASE WHEN (SELECT role FROM users WHERE id = i.cashier_id) = 'distributor'
+                         THEN i.cashier_id END)
+                          AND u.role = 'distributor'
              JOIN locations l ON l.id = i.location_id
              JOIN invoice_items ii ON ii.invoice_id = i.id
              JOIN books b ON b.id = ii.book_id
@@ -298,20 +301,30 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
 
     sql = f"""SELECT u.id, u.name, u.username, u.is_active, u.zone_id, u.created_at,
                      l.name AS zone_name,
-                     (SELECT COUNT(*) FROM invoices i WHERE i.cashier_id = u.id AND i.status = 'paid') AS invoice_count,
-                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i WHERE i.cashier_id = u.id AND i.status = 'paid') AS revenue,
+                     (SELECT COUNT(*) FROM invoices i
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.status = 'paid') AS invoice_count,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE i.cashier_id = u.id AND i.payment_mode = 'cash' AND i.status = 'paid') AS cash_total,
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.status = 'paid') AS revenue,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE i.cashier_id = u.id AND i.payment_mode = 'upi'
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.payment_mode = 'cash' AND i.status = 'paid') AS cash_total,
+                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.payment_mode = 'upi'
                          AND i.razorpay_qr_code_id IS NULL AND i.status = 'paid') AS upi_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE i.cashier_id = u.id AND i.razorpay_qr_code_id IS NOT NULL
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.razorpay_qr_code_id IS NOT NULL
                          AND i.status = 'paid') AS razorpay_total,
                      (SELECT COALESCE(SUM(ii.qty),0)
                         FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-                       WHERE i.cashier_id = u.id AND i.status = 'paid') AS books_sold,
-                     (SELECT MAX(i.created_at) FROM invoices i WHERE i.cashier_id = u.id AND i.status = 'paid') AS last_sale
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.status = 'paid') AS books_sold,
+                     (SELECT MAX(i.created_at) FROM invoices i
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.status = 'paid') AS last_sale
               FROM users u
               JOIN locations l ON l.id = u.zone_id
               WHERE {where}
@@ -345,10 +358,13 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
                   COALESCE(SUM(CASE WHEN razorpay_qr_code_id IS NOT NULL THEN total ELSE 0 END),0) AS razorpay_total,
                   COALESCE((SELECT SUM(ii.qty) FROM invoice_items ii
                               JOIN invoices i2 ON i2.id = ii.invoice_id
-                             WHERE i2.cashier_id = ? AND i2.status = 'paid'),0) AS books_sold,
+                             WHERE (i2.distributor_id = ? OR (i2.distributor_id IS NULL AND i2.cashier_id = ?))
+                               AND i2.status = 'paid'),0) AS books_sold,
                   MAX(created_at) AS last_sale
-           FROM invoices WHERE cashier_id = ? AND status = 'paid'""",
-        (user_id, user_id),
+           FROM invoices
+           WHERE (distributor_id = ? OR (distributor_id IS NULL AND cashier_id = ?))
+             AND status = 'paid'""",
+        (user_id, user_id, user_id, user_id),
     ).fetchone()
 
     invoices = db.execute(
@@ -360,9 +376,9 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
                   (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS line_count,
                   (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
            FROM invoices i JOIN locations l ON l.id = i.location_id
-           WHERE i.cashier_id = ?
+           WHERE (i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))
            ORDER BY i.id DESC""",
-        (user_id,),
+        (user_id, user_id),
     ).fetchall()
 
     books = db.execute(
@@ -372,9 +388,10 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
            FROM invoice_items ii
            JOIN invoices i ON i.id = ii.invoice_id
            JOIN books b ON b.id = ii.book_id
-           WHERE i.cashier_id = ? AND i.status = 'paid'
+           WHERE (i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))
+             AND i.status = 'paid'
            GROUP BY b.id ORDER BY revenue DESC""",
-        (user_id,),
+        (user_id, user_id),
     ).fetchall()
 
     return {

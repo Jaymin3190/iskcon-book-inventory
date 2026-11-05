@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], zones: [], zoneDistributors: [], auditRows: [], stockRows: [], damagedRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null, dailyZoneDays: 14 };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], posDistributors: [], zones: [], zoneDistributors: [], auditRows: [], stockRows: [], damagedRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null, dailyZoneDays: 14 };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -1343,8 +1343,14 @@ async function dmSubmit() {
 }
 
 async function pos() {
-  const [books, locs] = await Promise.all([api('/api/books'), api('/api/locations')]);
+  const [books, locs, users] = await Promise.all([
+    api('/api/books'),
+    api('/api/locations'),
+    state.user.role === 'super_admin' ? api('/api/users') : Promise.resolve([]),
+  ]);
   state.books = books;
+  state.locations = locs;
+  state.posDistributors = users.filter(user => user.role === 'distributor' && user.is_active);
   state.cart = [];
   const isZoneMapped = state.user.role !== 'super_admin' && state.user.zone_id != null;
   const defaultWarehouse = locs.find(l => l.type === 'warehouse' && l.parent_id == null);
@@ -1360,7 +1366,7 @@ async function pos() {
     <div class="card">
       <h2>Quick-scan billing</h2>
       <div class="toolbar pos-scan-toolbar" id="scanBox">
-        ${isZoneMapped ? `<span class="billing-location">Billing zone: <strong>${esc(billingLocation.name)}</strong></span>` : `<select id="billLoc" style="max-width:220px">${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`}
+        ${isZoneMapped ? `<span class="billing-location">Billing zone: <strong>${esc(billingLocation.name)}</strong></span>` : `<select id="billLoc" style="max-width:220px" onchange="renderPosDistributorOptions()">${locs.map(l => `<option value="${l.id}" ${String(l.id) === String(defLoc) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`}
         <input id="scanInput" placeholder="Scan / type barcode or ISBN, press Enter" style="flex:1" onkeydown="if(event.key==='Enter')doScan(this.value)">
         <button id="cameraToggle" class="primary" onclick="openScannerPOS()">Scan with camera</button>
         <button class="action" onclick="invoiceList()">Invoice history</button>
@@ -1369,6 +1375,7 @@ async function pos() {
           ${books.map(b => `<option value="${b.barcode}">${esc(b.title)}</option>`).join('')}
         </select>
       </div>
+      <div id="posDistributorRow" class="form-row" style="max-width:420px"></div>
       <table id="cartTable">
         <tr><th>Book</th><th>Price</th><th>Qty</th><th>Total</th><th></th></tr>
       </table>
@@ -1398,9 +1405,31 @@ async function pos() {
         <button class="primary" onclick="checkout()">Save / Share</button>
       </div>
     </div>`;
+  renderPosDistributorOptions();
   renderCart();
   toggleUpiQr();
   document.getElementById('scanInput').focus();
+}
+
+function renderPosDistributorOptions() {
+  const row = document.getElementById('posDistributorRow');
+  const locationSelect = document.getElementById('billLoc');
+  if (!row || !locationSelect || state.user.role !== 'super_admin') return;
+  const selectedLocation = state.locations.find(location => location.id === Number(locationSelect.value));
+  const distributors = selectedLocation?.type === 'warehouse' ? state.posDistributors : [];
+  if (!distributors.length) {
+    row.hidden = true;
+    row.innerHTML = '';
+    return;
+  }
+  const previous = document.getElementById('posDistributor')?.value || '';
+  row.hidden = false;
+  row.innerHTML = `<label for="posDistributor">Credit this godown sale to a distributor (optional)</label>
+    <select id="posDistributor">
+      <option value="">No distributor attribution</option>
+      ${distributors.map(distributor => `<option value="${distributor.id}"${String(distributor.id) === previous ? ' selected' : ''}>${esc(distributor.name)}</option>`).join('')}
+    </select>
+    <span class="hint">The sale is credited to the distributor only; it is not assigned to a zone or added to distributor stock.</span>`;
 }
 
 function toggleUpiQr() {
@@ -1866,6 +1895,7 @@ async function checkout() {
   try {
     res = await api('/api/pos/invoices', { method: 'POST', body: {
       location_id: state.user.role !== 'super_admin' ? state.user.zone_id : Number(document.getElementById('billLoc').value),
+      distributor_id: Number(document.getElementById('posDistributor')?.value) || null,
       customer_name: custName, customer_phone: custPhone,
       payment_mode: payMode, payment_ref: payRef,
       discount: Number(document.getElementById('discount').value) || 0,
@@ -2184,6 +2214,7 @@ async function invoiceDetail(invoiceId) {
       <tr><th>Date</th><td>${esc(formatAuditTime(inv.created_at))}</td></tr>
       <tr><th>Customer</th><td>${esc(inv.customer_name || '—')}${inv.customer_phone ? ' · ' + esc(inv.customer_phone) : ''}</td></tr>
       <tr><th>Billed by</th><td>${esc(inv.cashier_name || '—')} · ${esc(inv.location_name)}</td></tr>
+      ${inv.distributor_name ? `<tr><th>Sales credited to</th><td>${esc(inv.distributor_name)}</td></tr>` : ''}
       <tr><th>Payment</th><td>${esc(inv.payment_mode.toUpperCase())}${inv.payment_ref ? ' · ' + esc(inv.payment_ref) : ''}</td></tr>
       <tr><th>Status</th><td><span class="badge ${esc(inv.status)}">${esc(inv.status)}</span></td></tr>
       ${inv.handed_over ? '<tr><th>Cash handover</th><td>Included in a payment-in receipt</td></tr>' : ''}

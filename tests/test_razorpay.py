@@ -36,11 +36,22 @@ class RazorpayIntegrationTests(unittest.TestCase):
                VALUES (1, 'cashier', 'not-used', 'Cashier', 'temple', 2)"""
         )
         self.db.execute(
+            """INSERT INTO users (id, username, password_hash, name, role, zone_id)
+               VALUES (2, 'dist', 'not-used', 'Distributor', 'distributor', 2)"""
+        )
+        self.db.execute(
+            """INSERT INTO users (id, username, password_hash, name, role)
+               VALUES (3, 'admin', 'not-used', 'Admin', 'super_admin')"""
+        )
+        self.db.execute(
             """INSERT INTO books (id, title, barcode, price)
                VALUES (1, 'Test book', '1234567890', 150.25)"""
         )
         self.db.execute(
             "INSERT INTO stock (book_id, location_id, qty) VALUES (1, 2, 5)"
+        )
+        self.db.execute(
+            "INSERT INTO stock (book_id, location_id, qty) VALUES (1, 1, 8)"
         )
         self.db.commit()
         self.user = self.db.execute("SELECT * FROM users WHERE id = 1").fetchone()
@@ -111,6 +122,56 @@ class RazorpayIntegrationTests(unittest.TestCase):
         self.assertEqual(invoice["razorpay_qr_image_url"], "https://rzp.io/i/test123")
         self.assertEqual(invoice["payment_mode"], "upi")
         self.assertEqual(stock, 4)
+
+    def test_godown_sale_can_be_credited_to_a_distributor_without_transferring_stock(self):
+        admin = self.db.execute("SELECT * FROM users WHERE id = 3").fetchone()
+        data = pos.InvoiceIn(
+            location_id=1,
+            distributor_id=2,
+            customer_name="Bulk customer",
+            customer_phone="9999999999",
+            payment_mode="cash",
+            items=[pos.InvoiceItemIn(barcode="1234567890", qty=3)],
+        )
+
+        result = pos.create_invoice(data, db=self.db, user=admin)
+
+        invoice = self.db.execute(
+            "SELECT location_id, distributor_id, cashier_id FROM invoices WHERE id = ?",
+            (result["invoice_id"],),
+        ).fetchone()
+        warehouse_stock = self.db.execute(
+            "SELECT qty FROM stock WHERE book_id = 1 AND location_id = 1"
+        ).fetchone()["qty"]
+        zone_stock = self.db.execute(
+            "SELECT qty FROM stock WHERE book_id = 1 AND location_id = 2"
+        ).fetchone()["qty"]
+        self.assertEqual(tuple(invoice), (1, 2, 3))
+        self.assertEqual(warehouse_stock, 5)
+        self.assertEqual(zone_stock, 5)
+        distributor = self.db.execute("SELECT * FROM users WHERE id = 2").fetchone()
+        visible_invoices = pos.list_invoices(db=self.db, user=distributor)
+        self.assertEqual(visible_invoices, [])
+        with self.assertRaises(HTTPException) as raised:
+            pos.get_invoice(result["invoice_id"], db=self.db, user=distributor)
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_distributor_attribution_is_super_admin_only_and_warehouse_only(self):
+        data = pos.InvoiceIn(
+            location_id=2,
+            distributor_id=2,
+            customer_name="Customer",
+            customer_phone="9999999999",
+            items=[pos.InvoiceItemIn(barcode="1234567890", qty=1)],
+        )
+        with self.assertRaises(HTTPException) as raised:
+            pos.create_invoice(data, db=self.db, user=self.user)
+        self.assertEqual(raised.exception.status_code, 403)
+
+        admin = self.db.execute("SELECT * FROM users WHERE id = 3").fetchone()
+        with self.assertRaises(HTTPException) as raised:
+            pos.create_invoice(data, db=self.db, user=admin)
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_razorpay_is_rejected_without_razorpay_credentials(self):
         data = pos.InvoiceIn(
