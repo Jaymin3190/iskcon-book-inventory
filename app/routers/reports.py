@@ -34,8 +34,10 @@ def sales_report(frm: str = None, to: str = None, location_id: int = None, db=De
 
 
 @router.get("/api/reports/sales-by-book")
-def sales_by_book(frm: str = None, to: str = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+def sales_by_book(frm: str = None, to: str = None, location_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = invoice_location_ids(db, user)
+    if location_id is not None and location_id not in ids:
+        return []
     sql = """SELECT b.id AS book_id, b.title, b.barcode,
                     COALESCE(SUM(ii.qty),0) AS qty_sold, COALESCE(SUM(ii.line_total),0) AS revenue
              FROM invoice_items ii
@@ -43,6 +45,9 @@ def sales_by_book(frm: str = None, to: str = None, db=Depends(get_db), user=Depe
              JOIN books b ON b.id = ii.book_id
              WHERE i.location_id IN ({}) AND i.status = 'paid'""".format(",".join("?" * len(ids)))
     params = list(ids)
+    if location_id is not None:
+        sql += " AND i.location_id = ?"
+        params.append(location_id)
     if frm:
         sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
         params.append(frm)
@@ -95,6 +100,32 @@ def stock_summary(db=Depends(get_db), user=Depends(require_roles("super_admin", 
              WHERE l.id IN ({})
              GROUP BY l.id ORDER BY l.type, l.name""".format(",".join("?" * len(ids)))
     return [dict(r) for r in db.execute(sql, list(ids)).fetchall()]
+
+
+@router.get("/api/reports/stock-summary/{location_id}/books")
+def stock_summary_books(location_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+    ids = stock_location_ids(db, user)
+    if location_id not in ids:
+        raise HTTPException(403, "Forbidden")
+    location = db.execute(
+        "SELECT id, code, name, type FROM locations WHERE id = ?",
+        (location_id,),
+    ).fetchone()
+    if not location:
+        raise HTTPException(404, "Location not found")
+    books = db.execute(
+        """SELECT b.id AS book_id, b.title, b.barcode, b.isbn, b.price,
+                  COALESCE(s.qty, 0) AS qty,
+                  COALESCE(s.qty, 0) * b.price AS stock_value
+           FROM books b
+           LEFT JOIN stock s ON s.book_id = b.id AND s.location_id = ?
+           ORDER BY b.title, b.barcode""",
+        (location_id,),
+    ).fetchall()
+    return {
+        "location": dict(location),
+        "books": [dict(row) for row in books],
+    }
 
 
 @router.get("/api/reports/zones")
@@ -275,13 +306,90 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
 
 @router.get("/api/reports/transfers")
 def transfers_report(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
-    ids = location_ids(db, user)
+    if user["role"] == "zone_admin":
+        ids = zone_location_ids(db, user["zone_id"])
+        scope_sql = "to_location_id IN ({})".format(",".join("?" * len(ids)))
+        scope_params = list(ids)
+    else:
+        ids = location_ids(db, user)
+        placeholders = ",".join("?" * len(ids))
+        scope_sql = "(from_location_id IN ({}) OR to_location_id IN ({}))".format(placeholders, placeholders)
+        scope_params = list(ids) + list(ids)
     sql = """SELECT status, COUNT(*) AS n
              FROM transfers
-             WHERE from_location_id IN ({}) OR to_location_id IN ({})
-             GROUP BY status""".format(",".join("?" * len(ids)), ",".join("?" * len(ids)))
-    params = list(ids) + list(ids)
-    return [dict(r) for r in db.execute(sql, params).fetchall()]
+             WHERE {}
+             GROUP BY status""".format(scope_sql)
+    return [dict(r) for r in db.execute(sql, scope_params).fetchall()]
+
+
+@router.get("/api/reports/transfers/{status}/details")
+def transfer_status_details(status: str, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+    if user["role"] == "zone_admin":
+        ids = zone_location_ids(db, user["zone_id"])
+        scope_sql = "t.to_location_id IN ({})".format(",".join("?" * len(ids)))
+        scope_params = list(ids)
+    else:
+        ids = location_ids(db, user)
+        placeholders = ",".join("?" * len(ids))
+        scope_sql = "(t.from_location_id IN ({}) OR t.to_location_id IN ({}))".format(placeholders, placeholders)
+        scope_params = list(ids) + list(ids)
+    rows = db.execute(
+        """SELECT t.id AS transfer_id, t.request_number, t.status, t.requested_at,
+                  src.name AS from_location, dest.name AS to_location,
+                  b.id AS book_id, b.title, b.barcode, ti.qty
+           FROM transfers t
+           JOIN locations src ON src.id = t.from_location_id
+           JOIN locations dest ON dest.id = t.to_location_id
+           LEFT JOIN transfer_items ti ON ti.transfer_id = t.id
+           LEFT JOIN books b ON b.id = ti.book_id
+           WHERE t.status = ? AND {}
+           ORDER BY t.requested_at DESC, t.id DESC, b.title""".format(scope_sql),
+        [status] + scope_params,
+    ).fetchall()
+    transfers_by_id = {}
+    book_summary = {}
+    total_units = 0
+    for row in rows:
+        transfer = transfers_by_id.setdefault(row["transfer_id"], {
+            "transfer_id": row["transfer_id"],
+            "request_number": row["request_number"],
+            "requested_at": row["requested_at"],
+            "from_location": row["from_location"],
+            "to_location": row["to_location"],
+            "items": [],
+        })
+        if row["book_id"] is None:
+            continue
+        item = {
+            "book_id": row["book_id"],
+            "title": row["title"],
+            "barcode": row["barcode"],
+            "qty": row["qty"],
+        }
+        transfer["items"].append(item)
+        summary = book_summary.setdefault(row["book_id"], {
+            "book_id": row["book_id"],
+            "title": row["title"],
+            "barcode": row["barcode"],
+            "qty": 0,
+            "transfer_count": 0,
+            "_transfer_ids": set(),
+        })
+        summary["qty"] += row["qty"]
+        summary["_transfer_ids"].add(row["transfer_id"])
+        total_units += row["qty"]
+    summary_rows = []
+    for summary in book_summary.values():
+        summary["transfer_count"] = len(summary.pop("_transfer_ids"))
+        summary_rows.append(summary)
+    summary_rows.sort(key=lambda item: item["title"].casefold())
+    return {
+        "status": status,
+        "transfer_count": len(transfers_by_id),
+        "total_units": total_units,
+        "books": summary_rows,
+        "transfers": list(transfers_by_id.values()),
+    }
 
 
 @router.get("/api/reports/returns")

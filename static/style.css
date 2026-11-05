@@ -346,6 +346,8 @@ table tr[hidden] { display: none !important; }
 .mini-stat .lbl { font-size: 11px; color: #8a6d3b; margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
 #modalBox h4 { color: #6b4a1f; margin: 16px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
 .zone-row { cursor: pointer; }
+.summary-clickable-row { cursor: pointer; }
+.summary-clickable-row:hover td { background: #f2e4d1; }
 tr.clickable-row { cursor: pointer; }
 tr.clickable-row:hover td { background: #f2e4d1; }
 .pay-total { display: flex; align-items: baseline; gap: 8px; justify-content: flex-end; margin: 10px 0 4px; font-size: 13px; color: #6b5a3a; }

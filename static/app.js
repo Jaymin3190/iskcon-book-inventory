@@ -378,21 +378,81 @@ async function dashboard() {
       <div class="stat"><div class="num">${open}</div><div class="lbl">Open transfer requests</div></div>
     </div>
     ${zoneHtml}
-    <div class="card stock-summary-card"><h2>Stock summary by location</h2>
+    <div class="card stock-summary-card"><h2>Stock summary by location</h2><p class="hint">Select a location to see every book and its stock.</p>
       <table class="stock-summary-table"><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
-        ${stock.map(s => `<tr><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${(s.stock_value || 0).toFixed(0)}</span></td></tr>`).join('')}
+        ${stock.map(s => `<tr class="summary-clickable-row" onclick="showLocationStock(${Number(s.location_id)})" title="Click to view books at this location"><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${(s.stock_value || 0).toFixed(0)}</span></td></tr>`).join('')}
       </table>
     </div>
-    <div class="card"><h2>Sales by location</h2>
+    <div class="card"><h2>Sales by location</h2><p class="hint">Select a location to see sales by book.</p>
       <table><tr><th>Location</th><th>Invoices</th><th>Subtotal</th><th>Discount</th><th>Revenue</th></tr>
-        ${sales.map(s => `<tr><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.subtotal.toFixed(2)}</td><td>&#8377;${s.discount.toFixed(2)}</td><td>&#8377;${s.revenue.toFixed(2)}</td></tr>`).join('')}
+        ${sales.map(s => `<tr class="summary-clickable-row" onclick="showLocationSales(${Number(s.location_id)})" title="Click to view sales by book"><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.subtotal.toFixed(2)}</td><td>&#8377;${s.discount.toFixed(2)}</td><td>&#8377;${s.revenue.toFixed(2)}</td></tr>`).join('')}
       </table>
     </div>
-    <div class="card"><h2>Transfers by status</h2>
+    <div class="card"><h2>Transfers by status</h2><p class="hint">Select a status to see its transfers and books.</p>
       <table><tr><th>Status</th><th>Count</th></tr>
-        ${tf.map(t => `<tr><td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td><td>${t.n}</td></tr>`).join('')}
+        ${tf.map(t => `<tr class="summary-clickable-row" data-status="${esc(t.status)}" onclick="showTransferStatusDetails(this.dataset.status)" title="Click to view transfers and books"><td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td><td>${t.n}</td></tr>`).join('')}
       </table>
     </div>`;
+}
+
+async function showLocationStock(locationId) {
+  try {
+    const data = await api(`/api/reports/stock-summary/${locationId}/books`);
+    const totalUnits = data.books.reduce((sum, book) => sum + Number(book.qty || 0), 0);
+    const totalValue = data.books.reduce((sum, book) => sum + Number(book.stock_value || 0), 0);
+    const rows = data.books.map(book => `<tr>
+      <td>${esc(book.title)}</td><td>${esc(book.barcode)}</td><td>${esc(book.isbn || '—')}</td>
+      <td>${Number(book.qty || 0)}</td><td>&#8377;${Number(book.price || 0).toFixed(2)}</td>
+      <td>&#8377;${Number(book.stock_value || 0).toFixed(2)}</td>
+    </tr>`).join('') || '<tr><td colspan="6" class="hint">No books found.</td></tr>';
+    openModal(`<h3>${esc(data.location.name)} &mdash; stock details</h3>
+      <p class="hint">${esc(data.location.code)} &middot; ${data.books.length} book types</p>
+      <div class="mini-stats">${miniStat('Book types', data.books.length)}${miniStat('Total units', totalUnits)}${miniStat('Stock value', '&#8377;' + totalValue.toFixed(2))}</div>
+      <div class="table-scroll"><table><tr><th>Book</th><th>Barcode</th><th>ISBN</th><th>Units</th><th>Unit price</th><th>Value</th></tr>${rows}</table></div>`);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function showLocationSales(locationId) {
+  try {
+    const [sales, books] = await Promise.all([
+      api(`/api/reports/sales?location_id=${locationId}`),
+      api(`/api/reports/sales-by-book?location_id=${locationId}`),
+    ]);
+    const summary = sales[0];
+    const rows = books.map(book => `<tr>
+      <td>${esc(book.title)}</td><td>${esc(book.barcode)}</td><td>${Number(book.qty_sold || 0)}</td>
+      <td>&#8377;${Number(book.revenue || 0).toFixed(2)}</td>
+    </tr>`).join('') || '<tr><td colspan="4" class="hint">No books sold at this location.</td></tr>';
+    openModal(`<h3>${esc(summary?.location_name || 'Location')} &mdash; sales details</h3>
+      <div class="mini-stats">
+        ${miniStat('Invoices', summary?.invoice_count || 0)}
+        ${miniStat('Subtotal', '&#8377;' + Number(summary?.subtotal || 0).toFixed(2))}
+        ${miniStat('Discount', '&#8377;' + Number(summary?.discount || 0).toFixed(2))}
+        ${miniStat('Revenue', '&#8377;' + Number(summary?.revenue || 0).toFixed(2))}
+      </div>
+      <h4>Sales by book (${books.length} book types)</h4>
+      <div class="table-scroll"><table><tr><th>Book</th><th>Barcode</th><th>Units sold</th><th>Revenue</th></tr>${rows}</table></div>`);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function showTransferStatusDetails(status) {
+  try {
+    const data = await api(`/api/reports/transfers/${encodeURIComponent(status)}/details`);
+    const bookRows = data.books.map(book => `<tr>
+      <td>${esc(book.title)}</td><td>${esc(book.barcode)}</td><td>${book.qty}</td><td>${book.transfer_count}</td>
+    </tr>`).join('') || '<tr><td colspan="4" class="hint">No books in these transfers.</td></tr>';
+    const transferRows = data.transfers.map(transfer => `<tr>
+      <td>${esc(transfer.request_number)}</td><td>${esc(transfer.from_location)}</td><td>${esc(transfer.to_location)}</td>
+      <td>${esc(formatAuditTime(transfer.requested_at))}</td>
+      <td>${transfer.items.map(item => `${esc(item.title)} &times; ${Number(item.qty)}`).join('<br>') || '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="hint">No transfers with this status.</td></tr>';
+    openModal(`<h3>Transfers &mdash; ${esc(data.status)}</h3>
+      <div class="mini-stats">${miniStat('Transfers', data.transfer_count)}${miniStat('Book types', data.books.length)}${miniStat('Total units', data.total_units)}</div>
+      <h4>Book summary</h4>
+      <div class="table-scroll"><table><tr><th>Book</th><th>Barcode</th><th>Total units</th><th>Transfers</th></tr>${bookRows}</table></div>
+      <h4>Transfer details</h4>
+      <div class="table-scroll"><table><tr><th>Request</th><th>From</th><th>To</th><th>Requested</th><th>Books</th></tr>${transferRows}</table></div>`);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function downloadCsv(filename, columns, rows) {
@@ -2480,21 +2540,21 @@ async function reports() {
   }
   document.getElementById('content').innerHTML = `
     ${distributorSalesHtml}
-    <div class="card"><h2>Sales by location</h2>
+    <div class="card"><h2>Sales by location</h2><p class="hint">Select a location to see sales by book.</p>
       <table><tr><th>Location</th><th>Invoices</th><th>Revenue</th></tr>
-        ${sales.map(s => `<tr><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.revenue.toFixed(2)}</td></tr>`).join('')}
+        ${sales.map(s => `<tr class="summary-clickable-row" onclick="showLocationSales(${Number(s.location_id)})" title="Click to view sales by book"><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.revenue.toFixed(2)}</td></tr>`).join('')}
       </table></div>
     <div class="card"><h2>Best sellers</h2>
       <table><tr><th>Book</th><th>Barcode</th><th>Units sold</th><th>Revenue</th></tr>
         ${byBook.map(b => `<tr><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${b.qty_sold}</td><td>&#8377;${b.revenue.toFixed(2)}</td></tr>`).join('')}
       </table></div>
-    <div class="card stock-summary-card"><h2>Stock summary</h2>
+    <div class="card stock-summary-card"><h2>Stock summary</h2><p class="hint">Select a location to see every book and its stock.</p>
       <table class="stock-summary-table"><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
-        ${stockSum.map(s => `<tr><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${s.stock_value.toFixed(0)}</span></td></tr>`).join('')}
+        ${stockSum.map(s => `<tr class="summary-clickable-row" onclick="showLocationStock(${Number(s.location_id)})" title="Click to view books at this location"><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${s.stock_value.toFixed(0)}</span></td></tr>`).join('')}
       </table></div>
-    <div class="card"><h2>Transfers by status</h2>
+    <div class="card"><h2>Transfers by status</h2><p class="hint">Select a status to see its transfers and books.</p>
       <table><tr><th>Status</th><th>Count</th></tr>
-        ${tf.map(t => `<tr><td>${esc(t.status)}</td><td>${t.n}</td></tr>`).join('')}
+        ${tf.map(t => `<tr class="summary-clickable-row" data-status="${esc(t.status)}" onclick="showTransferStatusDetails(this.dataset.status)" title="Click to view transfers and books"><td>${esc(t.status)}</td><td>${t.n}</td></tr>`).join('')}
       </table></div>`;
 }
 
