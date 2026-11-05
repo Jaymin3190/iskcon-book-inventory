@@ -326,7 +326,7 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
                          AND i.status = 'paid') AS last_sale
               FROM users u
-              JOIN locations l ON l.id = u.zone_id
+              LEFT JOIN locations l ON l.id = u.zone_id
               WHERE {where}
               ORDER BY l.name, u.name"""
     return [dict(r) for r in db.execute(sql, params).fetchall()]

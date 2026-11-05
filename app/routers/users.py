@@ -95,9 +95,9 @@ def create_user(data: UserIn, db=Depends(get_db), user=Depends(require_roles("su
         zone_id = user["zone_id"]
     else:
         zone_id = data.zone_id
-    if data.role != "super_admin" and not zone_id:
+    if data.role not in ("super_admin", "distributor") and not zone_id:
         raise HTTPException(400, "A zone is required for every role except super admin")
-    if data.role != "super_admin":
+    if zone_id and data.role != "super_admin":
         validate_zone(db, zone_id)
     existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
     if existing:
@@ -174,9 +174,9 @@ def update_user(user_id: int, data: UserPatch, db=Depends(get_db), user=Depends(
 
     final_role = data.role if data.role is not None else row["role"]
     final_zone = data.zone_id if "zone_id" in provided else row["zone_id"]
-    if final_role != "super_admin" and not final_zone:
+    if final_role not in ("super_admin", "distributor") and not final_zone:
         raise HTTPException(400, "A zone is required for every role except super admin")
-    if final_role != "super_admin":
+    if final_zone and final_role != "super_admin":
         validate_zone(db, final_zone)
 
     if fields:

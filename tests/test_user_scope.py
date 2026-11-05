@@ -110,6 +110,49 @@ class UserCreationScopeTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(tuple(created), ("zone_admin", 3))
 
+    def test_super_admin_can_create_and_unassign_a_distributor(self):
+        result = create_user(
+            UserIn(
+                username="godown-distributor",
+                password="test-password",
+                name="Godown Distributor",
+                role="distributor",
+            ),
+            db=self.db,
+            user=self.super_admin,
+        )
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT zone_id FROM users WHERE id = ?", (result["id"],)
+            ).fetchone()["zone_id"]
+        )
+
+        updated = update_user(
+            3,
+            UserPatch(zone_id=None),
+            db=self.db,
+            user=self.super_admin,
+        )
+        self.assertEqual(updated, {"ok": True})
+        self.assertIsNone(
+            self.db.execute("SELECT zone_id FROM users WHERE id = 3").fetchone()["zone_id"]
+        )
+
+    def test_super_admin_still_requires_zones_for_other_non_admin_roles(self):
+        for role in ("zone_admin", "temple"):
+            with self.subTest(role=role), self.assertRaises(HTTPException) as raised:
+                create_user(
+                    UserIn(
+                        username=f"no-zone-{role}",
+                        password="test-password",
+                        name="No Zone",
+                        role=role,
+                    ),
+                    db=self.db,
+                    user=self.super_admin,
+                )
+            self.assertEqual(raised.exception.status_code, 400)
+
     def test_zone_admin_can_edit_distributor_in_own_zone(self):
         result = update_user(
             3,

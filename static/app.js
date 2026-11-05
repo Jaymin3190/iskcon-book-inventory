@@ -2872,7 +2872,7 @@ async function users() {
         <tr><th>Username</th><th>Name</th><th>Role</th><th>Zone</th><th>Active</th>${canManageUsers ? '<th>Actions</th>' : ''}</tr>
         ${rows.map(u => `<tr class="clickable-row" onclick="rowOpen(event, 'userRowOpen', ${u.id})">
           <td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
-          <td>${esc(u.zone_name || '')}</td><td>${u.is_active ? 'Yes' : 'No'}</td>
+          <td>${esc(u.zone_name || (u.role === 'distributor' ? 'Godown-only' : ''))}</td><td>${u.is_active ? 'Yes' : 'No'}</td>
           ${canManageUsers ? `<td>${canEdit || (u.role === 'distributor' && u.zone_id === state.user.zone_id) ? `
             <button class="action" onclick="event.stopPropagation(); userForm(${u.id})">Edit</button>
             <button class="action" onclick="event.stopPropagation(); userToggle(${u.id})">${u.is_active ? 'Disable' : 'Enable'}</button>
@@ -2909,7 +2909,7 @@ async function userForm(userId = null) {
       </div>`}
       ${zoneAdmin
         ? `<div class="form-row"><label>Zone</label><input value="${esc(state.user.zone_name || '')}" readonly></div>`
-        : `<div class="form-row"><label>Zone *</label>
+        : `<div class="form-row"><label>Zone (optional for distributors)</label>
           <select id="uZone"><option value="">— none —</option>${zones.map(z => `<option value="${z.id}" ${String(u?.zone_id) === String(z.id) ? 'selected' : ''}>${esc(z.name)}</option>`).join('')}</select>
         </div>`}
       <div class="form-row"><label>Active</label>

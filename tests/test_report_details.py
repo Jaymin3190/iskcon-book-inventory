@@ -35,6 +35,10 @@ class ReportDetailsTests(unittest.TestCase):
             """INSERT INTO users (id, username, password_hash, name, role, zone_id)
                VALUES (1, 'dist-a', 'not-used', 'Distributor A', 'distributor', 2)"""
         )
+        self.db.execute(
+            """INSERT INTO users (id, username, password_hash, name, role, zone_id)
+               VALUES (5, 'godown-dist', 'not-used', 'Godown Distributor', 'distributor', NULL)"""
+        )
         self.db.executemany(
             """INSERT INTO books (id, title, barcode, price)
                VALUES (?, ?, ?, ?)""",
@@ -75,6 +79,17 @@ class ReportDetailsTests(unittest.TestCase):
             """INSERT INTO invoice_items
                    (invoice_id, book_id, qty, unit_price, line_total)
                VALUES (3, 1, 9, 100, 900)"""
+        )
+        self.db.execute(
+            """INSERT INTO invoices
+                   (id, invoice_number, location_id, payment_mode, subtotal, discount, total,
+                    status, distributor_id)
+               VALUES (4, 'INV-GODOWN-UNASSIGNED', 1, 'cash', 400, 0, 400, 'paid', 5)"""
+        )
+        self.db.execute(
+            """INSERT INTO invoice_items
+                   (invoice_id, book_id, qty, unit_price, line_total)
+               VALUES (4, 2, 2, 200, 400)"""
         )
         self.db.executemany(
             """INSERT INTO transfers
@@ -142,11 +157,14 @@ class ReportDetailsTests(unittest.TestCase):
         details = distributor_details(1, db=self.db, user=self.super_admin)
         zones = {row["id"]: row for row in zone_overview(db=self.db, user=self.super_admin)}
 
-        self.assertEqual(distributors[0]["books_sold"], 11)
+        distributor_by_id = {row["id"]: row for row in distributors}
+        self.assertEqual(distributor_by_id[1]["books_sold"], 11)
+        self.assertEqual(distributor_by_id[5]["books_sold"], 2)
+        self.assertIsNone(distributor_by_id[5]["zone_name"])
         self.assertEqual(details["summary"]["books_sold"], 11)
         self.assertEqual(details["books"][0]["qty"], 11)
         self.assertEqual(zones[2]["books_sold"], 2)
-        self.assertEqual(len(distributor_sales_report(db=self.db, user=self.super_admin)), 2)
+        self.assertEqual(len(distributor_sales_report(db=self.db, user=self.super_admin)), 3)
 
         zone_admin = {"role": "zone_admin", "zone_id": 2}
         zone_sales = distributor_sales_report(db=self.db, user=zone_admin)
