@@ -266,10 +266,9 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('resize', () => { if (window.innerWidth > 960) setSidebarOpen(false); });
 
-function openModal(html, wide = false) {
+function openModal(html) {
   stopCam();
   const modal = document.getElementById('modalBox');
-  modal.classList.toggle('wide-modal', wide);
   modal.innerHTML = `<button class="modal-close" type="button" aria-label="Close window" title="Close" onclick="closeModal()">&times;</button>${html}`;
   document.getElementById('modalBackdrop').hidden = false;
   enhanceTableFilters();
@@ -536,7 +535,7 @@ async function zoneDetails(zoneId) {
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Customer</th><th>Payment</th><th>Status</th><th>Qty</th><th>Total</th><th></th></tr>
       ${invoiceRows}
     </table>
-    <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`, true);
+    <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
 
 async function distributorDetails(userId, zoneId) {
@@ -577,7 +576,7 @@ async function distributorDetails(userId, zoneId) {
     <div class="toolbar" style="margin:16px 0 0">
       <button class="action" onclick="zoneDetails(${zoneId})">Back to distributors</button>
       <button class="action" onclick="closeModal()">Close</button>
-    </div>`, true);
+    </div>`);
 }
 
 let bookQuery = '';
@@ -2288,7 +2287,7 @@ async function paymentForm() {
   state.payZoneAdmins = users;
   const zones = [...new Map(users.map(u => [u.zone_id, u.zone_name])).entries()];
   openModal(`<h3>New payment in</h3>
-    <p class="hint">Select the zone leader handing over cash, then add the receipt numbers they are depositing. Receipts billed by their distributors count too, and the total is calculated for you.</p>
+    <p class="hint">Select the zone leader handing over cash, then choose the pending cash receipts they are depositing. Receipts billed by their distributors count too.</p>
     <div class="form-row"><label>Filter by zone</label>
       <select id="payZoneFilter" onchange="paymentZoneChanged()">
         <option value="">All zones</option>
@@ -2299,10 +2298,6 @@ async function paymentForm() {
       <select id="payUser" onchange="paymentPendingLoad()">
         ${users.map(u => `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
       </select>
-    </div>
-    <div class="toolbar" style="margin-top:12px">
-      <input id="payReceipt" placeholder="Scan / type receipt number, press Enter" autocomplete="off" style="flex:1;min-width:220px;font-family:Consolas,monospace" onkeydown="if(event.key==='Enter'){event.preventDefault();paymentAddReceipt();}">
-      <button class="action" onclick="paymentAddReceipt()">Add receipt</button>
     </div>
     <p id="payError" class="error"></p>
     <h4>Receipts to deposit</h4>
@@ -2349,8 +2344,6 @@ async function paymentPendingLoad() {
       <td>${esc(formatAuditTime(r.created_at))}</td>
       <td>&#8377;${Number(r.total).toFixed(2)}</td>
     </tr>`).join('') || '<tr><td colspan="5" class="hint">No pending cash receipts for this zone admin.</td></tr>');
-  const input = document.getElementById('payReceipt');
-  if (input) input.focus();
 }
 
 function paymentRenderCart(items, total, count) {
@@ -2364,7 +2357,7 @@ function paymentRenderCart(items, total, count) {
       <td>${esc(i.location_name)}</td>
       <td>&#8377;${Number(i.amount).toFixed(2)}</td>
       <td><button class="danger" data-receipt="${esc(i.invoice_number)}" onclick="paymentRemoveReceipt(this.dataset.receipt)" aria-label="Remove ${esc(i.invoice_number)}">&times;</button></td>
-    </tr>`).join('') || '<tr><td colspan="6" class="hint">No receipts added yet.</td></tr>');
+    </tr>`).join('') || '<tr><td colspan="6" class="hint">No receipts selected yet.</td></tr>');
   const totalEl = document.getElementById('payTotal');
   if (totalEl) totalEl.innerHTML = '&#8377;' + Number(total).toFixed(2);
   const countEl = document.getElementById('payCount');
@@ -2392,16 +2385,6 @@ async function paymentPreview() {
   }
 }
 
-function paymentAddReceipt() {
-  const input = document.getElementById('payReceipt');
-  const value = input.value.trim();
-  if (!value) return;
-  if (!state.payNumbers.includes(value)) state.payNumbers.push(value);
-  input.value = '';
-  input.focus();
-  paymentPreview();
-}
-
 function paymentAddSelected() {
   const picked = [...document.querySelectorAll('#payPendingTable .pay-pick:checked')].map(c => c.value);
   if (!picked.length) { toast('Select at least one pending receipt', 'error'); return; }
@@ -2415,7 +2398,7 @@ function paymentRemoveReceipt(number) {
 }
 
 async function paymentSubmit() {
-  if (!state.payNumbers.length) { toast('Add at least one receipt', 'error'); return; }
+  if (!state.payNumbers.length) { toast('Select at least one pending receipt', 'error'); return; }
   const userSelect = document.getElementById('payUser');
   try {
     const res = await api('/api/payments', { method: 'POST', body: {
