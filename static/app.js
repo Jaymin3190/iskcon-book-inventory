@@ -1829,6 +1829,7 @@ async function checkout() {
     invoiceId: res.invoice_id, invoiceNumber: res.invoice_number,
     customerName: custName, customerPhone: custPhone,
     total: Number(res.total), items: purchasedItems,
+    shareToken: res.share_token,
   };
   if (payMode === 'razorpay') {
     state.pendingPayment = {
@@ -1850,7 +1851,7 @@ async function checkout() {
 function showSavedInvoice(invoice, detail) {
   openModal(`<h3>Invoice saved</h3>
     <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
-    <p class="hint">${esc(detail)}. Share sends the invoice PDF through your device's share sheet so you can attach it in WhatsApp. If file sharing is unavailable, it opens the WhatsApp chat and saves the PDF to attach manually. Save downloads the PDF again.</p>
+    <p class="hint">${esc(detail)}. Share opens the customer's WhatsApp chat with their invoice and a secure link to view or download the PDF. Save downloads the PDF again.</p>
     <div class="toolbar">
       <button class="primary" onclick="shareSavedInvoice(${invoice.invoice_id})">Share</button>
       <button id="saveInvoiceButton" class="action" disabled onclick="downloadInvoicePdf(${invoice.invoice_id})">Save</button>
@@ -1873,7 +1874,7 @@ function finishSavedInvoice() {
 }
 
 function shareSavedInvoice(invoiceId) {
-  // Attach the invoice PDF through the device share sheet when supported.
+  // Send the customer a WhatsApp message with a public invoice link.
   shareInvoice(invoiceId);
 }
 
@@ -1885,7 +1886,12 @@ function invoiceShareMeta(inv) {
     customerPhone: inv.customerPhone ?? inv.customer_phone,
     total: Number(inv.total),
     items: (inv.items || []).map(i => ({ title: i.title, qty: i.qty })),
+    shareToken: inv.shareToken ?? inv.share_token,
   };
+}
+
+function invoiceShareLink(meta) {
+  return meta.shareToken ? `${location.origin}/i/${encodeURIComponent(meta.shareToken)}` : null;
 }
 
 // Detail modals cache their invoice so Share can prepare the PDF without an
@@ -1900,6 +1906,8 @@ function whatsappInvoiceMessage(meta) {
     `Invoice: ${meta.invoiceNumber}`,
     `Total: \u20b9${Number(meta.total).toFixed(2)}`,
   ];
+  const link = invoiceShareLink(meta);
+  if (link) lines.push('', 'View or download your invoice PDF here:', link);
   if (meta.items && meta.items.length) {
     lines.push('', 'Items:', ...meta.items.map(i => `- ${i.title} x ${i.qty}`));
   }
@@ -1935,14 +1943,29 @@ async function resolveInvoiceShareMeta(invoiceOrId) {
 
 async function shareInvoice(invoiceOrId) {
   let meta;
-  let blob;
   try {
     meta = await resolveInvoiceShareMeta(invoiceOrId);
-    blob = await fetchInvoicePdf(meta.invoiceId);
   } catch (e) {
     toast(e.message, 'error');
     return;
   }
+
+  // Primary: WhatsApp chat with the customer and a public link to the invoice.
+  const link = invoiceShareLink(meta);
+  if (link) {
+    try {
+      openWhatsApp(whatsappShareUrl(meta));
+      toast('Opening WhatsApp for ' + meta.customerName, 'success');
+      return;
+    } catch (_) {
+      // No usable phone number; fall back to the device share sheet below.
+    }
+  }
+
+  // Fallback: attach the PDF through the device share sheet when possible.
+  let blob;
+  try { blob = await fetchInvoicePdf(meta.invoiceId); }
+  catch (e) { toast(e.message, 'error'); return; }
 
   const file = typeof File === 'undefined' ? null
     : new File([blob], `invoice-${meta.invoiceNumber || meta.invoiceId}.pdf`, { type: 'application/pdf' });
@@ -1957,20 +1980,12 @@ async function shareInvoice(invoiceOrId) {
       return;
     } catch (e) {
       if (e.name === 'AbortError') return;
-      // Device share failed; fall back to opening the chat and saving the PDF.
+      // Device share failed; fall back to saving the PDF.
     }
   }
 
-  // Fallback for browsers without file sharing: open the customer's chat and
-  // save the PDF so it can be attached. WhatsApp links cannot attach files.
-  try {
-    openWhatsApp(whatsappShareUrl(meta));
-    toast('Opening WhatsApp for ' + meta.customerName, 'success');
-    savePdfFile(blob, meta.invoiceId);
-    toast('Invoice PDF saved. Attach it in the WhatsApp chat.', 'info');
-  } catch (e) {
-    toast(e.message, 'error');
-  }
+  savePdfFile(blob, meta.invoiceId);
+  toast('Invoice PDF saved.', 'info');
 }
 
 async function fetchInvoicePdf(invoiceId) {
@@ -2061,6 +2076,7 @@ async function checkInvoicePayment(invoiceId) {
         customerPhone: confirmed.customerPhone || invoice.customer_phone,
         total: Number(confirmed.total),
         items: confirmed.items || invoice.items,
+        shareToken: invoice.share_token,
       };
       showSavedInvoice({
         ...invoice,

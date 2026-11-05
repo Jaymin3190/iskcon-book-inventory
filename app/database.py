@@ -1,3 +1,4 @@
+import secrets
 import sqlite3
 
 from .config import DB_PATH
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS stock_count_items (
 CREATE TABLE IF NOT EXISTS invoices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_number TEXT NOT NULL UNIQUE,
+    share_token TEXT,
     location_id INTEGER NOT NULL REFERENCES locations(id),
     customer_name TEXT,
     customer_phone TEXT,
@@ -269,6 +271,24 @@ def _migrate_razorpay(conn):
     )
 
 
+def _migrate_invoice_share_tokens(conn):
+    """Give every invoice an unguessable token for its public share link."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(invoices)")}
+    if "share_token" not in columns:
+        conn.execute("ALTER TABLE invoices ADD COLUMN share_token TEXT")
+    missing = conn.execute(
+        "SELECT id FROM invoices WHERE share_token IS NULL OR share_token = ''"
+    ).fetchall()
+    for row in missing:
+        conn.execute(
+            "UPDATE invoices SET share_token = ? WHERE id = ?",
+            (secrets.token_urlsafe(24), row[0]),
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_share_token ON invoices(share_token)"
+    )
+
+
 def _migrate_transfer_numbers(conn):
     """Use short, human-friendly request numbers such as TRF-0001."""
     for row in conn.execute("SELECT id, request_number FROM transfers").fetchall():
@@ -286,6 +306,7 @@ def init_db():
     conn.executescript(SCHEMA)
     _migrate_users_zone_only(conn)
     _migrate_razorpay(conn)
+    _migrate_invoice_share_tokens(conn)
     _migrate_transfer_numbers(conn)
     conn.commit()
     conn.close()

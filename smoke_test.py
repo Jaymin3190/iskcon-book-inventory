@@ -253,6 +253,29 @@ with urllib.request.urlopen(req) as resp:
 check("invoice PDF download", pdf_body.startswith(b"%PDF-")
       and "attachment" in pdf_disposition and ".pdf" in pdf_disposition)
 
+# --- public invoice share links ---
+check("invoice detail exposes share token", bool(inv_detail.get("share_token")), inv_detail)
+
+with urllib.request.urlopen(f"{BASE}/i/{inv_detail['share_token']}") as resp:
+    public_html = resp.read().decode()
+check("public invoice page opens without login",
+      "Temple Admin" in public_html and inv_detail["invoice_number"] in public_html)
+check("public invoice page offers a PDF download",
+      f"/i/{inv_detail['share_token']}/pdf" in public_html)
+
+with urllib.request.urlopen(f"{BASE}/i/{inv_detail['share_token']}/pdf") as resp:
+    public_pdf = resp.read()
+    public_disposition = resp.headers.get("Content-Disposition", "")
+check("public invoice PDF downloads without login",
+      public_pdf.startswith(b"%PDF-") and "attachment" in public_disposition)
+
+try:
+    urllib.request.urlopen(f"{BASE}/i/not-a-real-token")
+    invalid_token_status = 200
+except urllib.error.HTTPError as error:
+    invalid_token_status = error.code
+check("unknown share token returns 404", invalid_token_status == 404)
+
 # --- stock count ---
 code, cnt = call("POST", "/api/stock/counts", token=temple_t, body={"location_id": 1})
 check("stock count created", code == 200, cnt)
@@ -357,6 +380,12 @@ code, zone_inv2 = call("POST", "/api/pos/invoices", token=zone_t, body={
 check("invoice numbers increment per user", code == 200
       and zone_inv2["invoice_number"] == "INV-leader-temple-zone-0002", zone_inv2)
 code, _ = call("DELETE", f"/api/pos/invoices/{zone_inv2['invoice_id']}", token=super_t)
+try:
+    urllib.request.urlopen(f"{BASE}/i/{zone_inv2['share_token']}")
+    deleted_token_status = 200
+except urllib.error.HTTPError as error:
+    deleted_token_status = error.code
+check("deleted invoice share link returns 404", deleted_token_status == 404)
 check("super admin can delete a zone admin bill", code == 200)
 code, zone_inv3 = call("POST", "/api/pos/invoices", token=zone_t, body={
     "customer_name": "Zone Walk-in 3", "customer_phone": "9999999999",

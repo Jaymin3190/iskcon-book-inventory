@@ -1,4 +1,5 @@
 import re
+import secrets
 import logging
 import sqlite3
 from html import escape
@@ -168,11 +169,12 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         num = next_invoice_number(db, user)
         status = "pending" if data.payment_mode == "razorpay" else "paid"
         stored_payment_mode = "upi" if data.payment_mode == "razorpay" else data.payment_mode
+        share_token = secrets.token_urlsafe(24)
         cur = db.execute(
-            """INSERT INTO invoices (invoice_number, location_id, customer_name, customer_phone,
+            """INSERT INTO invoices (invoice_number, share_token, location_id, customer_name, customer_phone,
                                      payment_mode, payment_ref, status, subtotal, discount, total, cashier_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (num, loc_id, customer_name, customer_phone,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (num, share_token, loc_id, customer_name, customer_phone,
              stored_payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"]),
         )
         iid = cur.lastrowid
@@ -216,6 +218,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         "discount": discount,
         "status": status,
         "payment_mode": payment_label,
+        "share_token": share_token,
     }
     if qr_code:
         result.update(
@@ -409,7 +412,7 @@ def invoice_date_ist(value):
     return format_ist_date(value)
 
 
-def invoice_html(inv, items):
+def invoice_html(inv, items, pdf_url=None):
     subtotal_cents = sum(round(float(it["line_total"]) * 100) for it in items)
     discount_cents = round(float(inv["discount"] or 0) * 100)
     line_discounts = []
@@ -484,9 +487,12 @@ def invoice_html(inv, items):
       .item-name {{ font-weight: 700; }}
       .percent {{ display: block; white-space: nowrap; }}
       .total td {{ background: #e71936; color: #fff; font-weight: 700; }}
+      .share-bar {{ display: flex; gap: 10px; justify-content: flex-end; padding: 12px 4px 2px; }}
+      .share-bar a, .share-bar button {{ border: 0; border-radius: 6px; background: #e71936; color: #fff; cursor: pointer; font: 600 13px Arial, sans-serif; padding: 10px 16px; text-decoration: none; }}
       @page {{ size: A4 landscape; margin: 8mm; }}
-      @media print {{ body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }} }}
+      @media print {{ .share-bar {{ display: none; }} body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }} }}
     </style></head><body>
+    {f'<div class="share-bar"><button onclick="window.print()">Print</button><a href="{pdf_url}">Download PDF</a></div>' if pdf_url else ''}
     <div class="contact">
       <div>☎ &nbsp;9427272312</div>
       <div>✉ &nbsp;iskconjamnagar@gmail.com</div>
