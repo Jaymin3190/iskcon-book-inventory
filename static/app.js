@@ -2619,8 +2619,8 @@ async function printPayment(paymentId) {
 
 async function reports() {
   const canViewDistributorSales = hasAnyRole('super_admin', 'zone_admin');
-  const [sales, byBook, stockSum, tf, distributorSales] = await Promise.all([
-    api('/api/reports/sales'), api('/api/reports/sales-by-book'), api('/api/reports/stock-summary'), api('/api/reports/transfers'),
+  const [byBook, distributorSales] = await Promise.all([
+    api('/api/reports/sales-by-book'),
     canViewDistributorSales ? api('/api/reports/distributor-sales') : Promise.resolve([]),
   ]);
   state.distributorSales = distributorSales;
@@ -2639,22 +2639,11 @@ async function reports() {
   }
   document.getElementById('content').innerHTML = `
     ${distributorSalesHtml}
-    <div class="card"><h2>Sales by location</h2><p class="hint">Select a location to see sales by book.</p>
-      <table><tr><th>Location</th><th>Invoices</th><th>Revenue</th></tr>
-        ${sales.map(s => `<tr class="summary-clickable-row" onclick="showLocationSales(${Number(s.location_id)})" title="Click to view sales by book"><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.revenue.toFixed(2)}</td></tr>`).join('')}
-      </table></div>
     <div class="card"><h2>Best sellers</h2>
       <table><tr><th>Book</th><th>Barcode</th><th>Units sold</th><th>Revenue</th></tr>
         ${byBook.map(b => `<tr><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${b.qty_sold}</td><td>&#8377;${b.revenue.toFixed(2)}</td></tr>`).join('')}
       </table></div>
-    <div class="card stock-summary-card"><h2>Stock summary</h2><p class="hint">Select a location to see every book and its stock.</p>
-      <table class="stock-summary-table"><tr><th>Location</th><th>Type</th><th>SKUs</th><th>Units</th><th>Value</th></tr>
-        ${stockSum.map(s => `<tr class="summary-clickable-row" onclick="showLocationStock(${Number(s.location_id)})" title="Click to view books at this location"><td>${esc(s.name)}</td><td><span class="stock-type ${esc(s.type)}">${esc(s.type)}</span></td><td>${s.skus}</td><td><span class="stock-quantity">${s.total_units}</span></td><td><span class="stock-value-text">&#8377;${s.stock_value.toFixed(0)}</span></td></tr>`).join('')}
-      </table></div>
-    <div class="card"><h2>Transfers by status</h2><p class="hint">Select a status to see its transfers and books.</p>
-      <table><tr><th>Status</th><th>Count</th></tr>
-        ${tf.map(t => `<tr class="summary-clickable-row" data-status="${esc(t.status)}" onclick="showTransferStatusDetails(this.dataset.status)" title="Click to view transfers and books"><td>${esc(t.status)}</td><td>${t.n}</td></tr>`).join('')}
-      </table></div>`;
+    `;
 }
 
 const AUDIT_ACTION_LABELS = {
