@@ -192,7 +192,7 @@ def pending_receipts(user_id: int, db=Depends(get_db), user=Depends(require_role
     rows = db.execute(
         """SELECT i.id, i.invoice_number, i.created_at, i.total,
                   l.name AS location_name,
-                  u.name AS cashier_name, u.role AS cashier_role
+                  u.id AS cashier_id, u.name AS cashier_name, u.role AS cashier_role
              FROM invoices i
              JOIN locations l ON l.id = i.location_id
              LEFT JOIN users u ON u.id = i.cashier_id

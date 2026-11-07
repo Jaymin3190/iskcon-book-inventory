@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], posDistributors: [], zones: [], zoneDistributors: [], auditRows: [], stockRows: [], damagedRows: [], payNumbers: [], payZoneAdmins: [], invoicePdf: null, dailyZoneDays: 14 };
+const state = { token: localStorage.getItem('tk') || '', user: null, activeTab: 'dashboard', books: [], scCountId: null, cart: [], distributorSales: [], locations: [], posDistributors: [], zones: [], zoneDistributors: [], auditRows: [], stockRows: [], damagedRows: [], payNumbers: [], payZoneAdmins: [], payPendingRows: [], payPendingPicked: new Set(), invoicePdf: null, dailyZoneDays: 14 };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -1045,6 +1045,7 @@ function transferDetailActions(t) {
   if (canManage && ['requested', 'rejected', 'received'].includes(t.status)) {
     html += `<button class="danger" onclick="tDelete(${t.id}, ${t.status === 'received'}, '${esc(t.request_number)}')">Delete request</button>`;
   }
+  html += `<button class="action" onclick="printTransfer(${t.id})">Print</button>`;
   html += `<button class="action" onclick="closeModal()">Close</button>`;
   return html;
 }
@@ -1097,6 +1098,25 @@ async function transferDetail(id) {
       ${t.items.map(i => `<tr><td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>${i.qty}</td><td>&#8377;${i.price}</td></tr>`).join('') || '<tr><td colspan="4" class="hint">No items.</td></tr>'}
     </table></div>
     <div class="toolbar" style="margin-top:16px">${transferDetailActions(t)}</div>`);
+}
+
+async function printTransfer(transferId) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Allow pop-ups to print the transfer', 'error'); return; }
+  try {
+    const res = await fetch('/api/stock/transfers/' + transferId + '/print', {
+      headers: { Authorization: 'Bearer ' + state.token },
+    });
+    if (!res.ok) throw new Error('Could not load the transfer');
+    const html = await res.text();
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    w.location.href = url;
+    w.focus();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    try { w.close(); } catch (_) {}
+    toast(e.message, 'error');
+  }
 }
 
 let trItems = [];
@@ -2458,12 +2478,17 @@ async function paymentForm() {
         ${users.map(u => `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
       </select>
     </div>
+    <div class="form-row"><label>Filter by distributor</label>
+      <select id="payDistributorFilter" onchange="paymentPendingRender()" disabled>
+        <option value="">All bills</option>
+      </select>
+    </div>
     <p id="payError" class="error"></p>
     <h4>Receipts to deposit</h4>
     <div class="table-scroll"><table id="payCartTable"></table></div>
     <div class="pay-total"><strong>Total cash to deposit:</strong> <span id="payTotal">&#8377;0.00</span> <span id="payCount" class="hint"></span></div>
     <h4>Pending cash receipts</h4>
-    <p class="hint">Tick receipts to add them in bulk. Only cash bills from this zone's leaders and distributors that have not been handed over appear here.</p>
+    <p class="hint">Tick receipts to add them in bulk, or use the header checkbox to select all visible receipts. Filter by distributor to narrow the list. Only cash bills from this zone's leaders and distributors that have not been handed over appear here.</p>
     <div class="table-scroll"><table id="payPendingTable"></table></div>
     <div class="toolbar" style="margin-top:10px"><button class="action" onclick="paymentAddSelected()">Add selected</button></div>
     <div class="form-row"><label>Note (optional)</label><input id="payNote" placeholder="e.g. Counted by the temple treasurer"></div>
@@ -2486,23 +2511,89 @@ function paymentZoneChanged() {
 
 async function paymentPendingLoad() {
   state.payNumbers = [];
+  state.payPendingPicked = new Set();
   const userSelect = document.getElementById('payUser');
   if (!userSelect) return;
   document.getElementById('payError').textContent = '';
   paymentRenderCart([], 0, 0);
-  const table = document.getElementById('payPendingTable');
   let rows = [];
   try { rows = await api('/api/payments/pending?user_id=' + Number(userSelect.value)); }
   catch (e) { toast(e.message, 'error'); }
   if (!document.getElementById('payPendingTable')) return;
-  table.innerHTML = `<tr><th></th><th>Receipt</th><th>Billed by</th><th>Date</th><th>Amount</th></tr>` +
+  state.payPendingRows = rows;
+  paymentPendingPopulateDistributors();
+  paymentPendingRender();
+}
+
+function paymentPendingPopulateDistributors() {
+  const select = document.getElementById('payDistributorFilter');
+  if (!select) return;
+  const current = select.value;
+  const distributors = [...new Map(
+    state.payPendingRows
+      .filter(r => r.cashier_role === 'distributor' && r.cashier_id != null)
+      .map(r => [String(r.cashier_id), r.cashier_name || 'Distributor'])
+  ).entries()];
+  select.innerHTML = '<option value="">All bills</option>' +
+    distributors.map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('');
+  if ([...select.options].some(o => o.value === current)) select.value = current;
+  select.disabled = distributors.length === 0;
+}
+
+function paymentPendingVisibleRows() {
+  const filter = document.getElementById('payDistributorFilter');
+  const all = state.payPendingRows || [];
+  return filter && filter.value
+    ? all.filter(r => String(r.cashier_id) === filter.value)
+    : all;
+}
+
+function paymentPendingRender() {
+  const table = document.getElementById('payPendingTable');
+  if (!table) return;
+  const filter = document.getElementById('payDistributorFilter');
+  const picked = state.payPendingPicked;
+  const rows = paymentPendingVisibleRows();
+  const allChecked = rows.length > 0 && rows.every(r => picked.has(r.invoice_number));
+  const someChecked = rows.some(r => picked.has(r.invoice_number));
+  table.innerHTML = `<tr>
+      <th class="pay-pick-head"><input type="checkbox" id="payPickAll" ${allChecked ? 'checked' : ''} onchange="paymentToggleAll(this.checked)" aria-label="Select all pending receipts"></th>
+      <th>Receipt</th><th>Billed by</th><th>Date</th><th>Amount</th>
+    </tr>` +
     (rows.map(r => `<tr>
-      <td><input type="checkbox" class="pay-pick" value="${esc(r.invoice_number)}" aria-label="Add ${esc(r.invoice_number)}"></td>
+      <td><input type="checkbox" class="pay-pick" data-receipt="${esc(r.invoice_number)}" ${picked.has(r.invoice_number) ? 'checked' : ''} onchange="paymentTogglePick(this)" aria-label="Add ${esc(r.invoice_number)}"></td>
       <td>${esc(r.invoice_number)}</td>
-      <td>${esc(r.cashier_name || '—')}</td>
+      <td>${esc(r.cashier_name || '—')}${r.cashier_role === 'distributor' ? '<span class="cart-book-barcode">distributor</span>' : ''}</td>
       <td>${esc(formatAuditTime(r.created_at))}</td>
       <td>&#8377;${Number(r.total).toFixed(2)}</td>
-    </tr>`).join('') || '<tr><td colspan="5" class="hint">No pending cash receipts for this zone admin.</td></tr>');
+    </tr>`).join('') || `<tr><td colspan="5" class="hint">${filter && filter.value ? 'No pending cash receipts from this distributor.' : 'No pending cash receipts for this zone admin.'}</td></tr>`);
+  const head = document.getElementById('payPickAll');
+  if (head) head.indeterminate = someChecked && !allChecked;
+}
+
+function paymentTogglePick(el) {
+  const number = el.dataset.receipt;
+  if (!number) return;
+  if (el.checked) state.payPendingPicked.add(number);
+  else state.payPendingPicked.delete(number);
+  paymentPendingSyncPickAll();
+}
+
+function paymentToggleAll(checked) {
+  paymentPendingVisibleRows().forEach(r => {
+    if (checked) state.payPendingPicked.add(r.invoice_number);
+    else state.payPendingPicked.delete(r.invoice_number);
+  });
+  paymentPendingRender();
+}
+
+function paymentPendingSyncPickAll() {
+  const head = document.getElementById('payPickAll');
+  if (!head) return;
+  const rows = paymentPendingVisibleRows();
+  const picked = state.payPendingPicked;
+  head.checked = rows.length > 0 && rows.every(r => picked.has(r.invoice_number));
+  head.indeterminate = !head.checked && rows.some(r => picked.has(r.invoice_number));
 }
 
 function paymentRenderCart(items, total, count) {
@@ -2545,7 +2636,7 @@ async function paymentPreview() {
 }
 
 function paymentAddSelected() {
-  const picked = [...document.querySelectorAll('#payPendingTable .pay-pick:checked')].map(c => c.value);
+  const picked = [...state.payPendingPicked];
   if (!picked.length) { toast('Select at least one pending receipt', 'error'); return; }
   picked.forEach(n => { if (!state.payNumbers.includes(n)) state.payNumbers.push(n); });
   paymentPreview();

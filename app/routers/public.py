@@ -21,10 +21,12 @@ def _shared_invoice(token: str, db):
     if not token:
         raise HTTPException(404, "Invoice not found")
     inv = db.execute(
-        """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+        """SELECT i.*, l.code AS location_code, l.name AS location_name,
+                  u.name AS cashier_name, d.name AS distributor_name
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
+           LEFT JOIN users d ON d.id = i.distributor_id
            WHERE i.share_token = ?""",
         (token,),
     ).fetchone()

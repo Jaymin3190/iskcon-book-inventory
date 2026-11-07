@@ -1,7 +1,10 @@
 from typing import Optional
 from uuid import uuid4
 
+from html import escape
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from ..auth import require_roles
@@ -9,7 +12,7 @@ from ..database import get_db
 from ..services.audit import log_audit
 from ..services.ledger import check_available, ensure_stock, move_stock
 from ..services.scope import can_view, location_ids, zone_location_ids, stock_location_ids
-from ..services.timezone import now_ist
+from ..services.timezone import format_ist_datetime, now_ist
 
 router = APIRouter(prefix="/api/stock", tags=["stock"])
 
@@ -304,8 +307,7 @@ def list_transfers(db=Depends(get_db), user=Depends(require_roles("super_admin",
     return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
-@router.get("/transfers/{transfer_id}")
-def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+def _load_transfer(db, transfer_id: int):
     t = db.execute(
         """SELECT t.*, f.code AS from_code, f.name AS from_name,
                   to_l.code AS to_code, to_l.name AS to_name,
@@ -325,17 +327,155 @@ def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_role
     ).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
-    if not _can_view_transfer(db, user, t):
-        raise HTTPException(403, "Forbidden")
     items = db.execute(
         """SELECT ti.*, b.title, b.barcode, b.price
            FROM transfer_items ti JOIN books b ON b.id = ti.book_id
-           WHERE ti.transfer_id = ?""",
+           WHERE ti.transfer_id = ?
+           ORDER BY ti.id""",
         (transfer_id,),
     ).fetchall()
     data = dict(t)
     data["items"] = [dict(r) for r in items]
     return data
+
+
+@router.get("/transfers/{transfer_id}")
+def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+    data = _load_transfer(db, transfer_id)
+    if not _can_view_transfer(db, user, data):
+        raise HTTPException(403, "Forbidden")
+    return data
+
+
+def _transfer_next_step(status) -> str:
+    return {
+        "requested": "Waiting for approval",
+        "approved": "Ready to dispatch",
+        "dispatched": "In transit — confirm receipt",
+        "received": "Completed",
+        "rejected": "Rejected",
+    }.get(status, status or "")
+
+
+def _transfer_print_steps(t) -> str:
+    def step(label, at, by, cls):
+        if at:
+            detail = format_ist_datetime(at) + (f" · {by}" if by else "")
+        else:
+            detail = "Next step" if "current" in cls.split() else "Pending"
+        mark = "✓ " if "done" in cls.split() else ""
+        return (f"<div class='step {cls}'><span class='label'>{mark}{escape(label)}</span>"
+                f"<span class='date'>{escape(detail)}</span></div>")
+
+    if t["status"] == "rejected":
+        return ("<div class='steps'>"
+                + step("Requested", t["requested_at"], t["requested_by_name"], "done")
+                + "<div class='step rejected'><span class='label'>Rejected</span>"
+                  "<span class='date'>No stock moved</span></div></div>")
+    order = ["requested", "approved", "dispatched", "received"]
+    index = order.index(t["status"]) if t["status"] in order else -1
+    return "<div class='steps'>" + "".join([
+        step("Requested", t["requested_at"], t["requested_by_name"],
+             "done" if t["status"] == "received" or index > 0 else "current"),
+        step("Approved", t["approved_at"], t["approved_by_name"],
+             "done" if t["status"] == "received" or index > 1 else "current" if index == 1 else ""),
+        step("Dispatched", t["dispatched_at"], t["dispatched_by_name"],
+             "done" if t["status"] == "received" or index > 2 else "current" if index == 2 else ""),
+        step("Completed", t["received_at"], t["received_by_name"],
+             "done" if t["status"] == "received" else "current" if index == 3 else ""),
+    ]) + "</div>"
+
+
+def transfer_print_html(t) -> str:
+    items = t["items"]
+    total_units = sum(int(i["qty"]) for i in items)
+    total_value = sum(float(i["price"] or 0) * int(i["qty"]) for i in items)
+    item_rows = "".join(
+        f"<tr><td>{escape(str(i['title']))}</td><td>{escape(str(i['barcode'] or ''))}</td>"
+        f"<td class='r'>{int(i['qty'])}</td>"
+        f"<td class='r'>{float(i['price'] or 0):.2f}</td>"
+        f"<td class='r'>{float(i['price'] or 0) * int(i['qty']):.2f}</td></tr>"
+        for i in items
+    ) or "<tr><td colspan='5' class='hint'>No items.</td></tr>"
+    note = (
+        f"<tr><th>Note</th><td colspan='3'>{escape(str(t['note']))}</td></tr>"
+        if t.get("note") else ""
+    )
+    status = escape(str(t["status"]))
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+    <title>Transfer {escape(str(t['request_number']))}</title>
+    <style>
+      * {{ box-sizing: border-box; }}
+      body {{ margin: 26px; color: #222; font-family: Arial, sans-serif; font-size: 12px; }}
+      .head {{ display: flex; justify-content: space-between; align-items: flex-start;
+               border-bottom: 2px solid #8a5a1f; padding-bottom: 10px; margin-bottom: 16px; }}
+      h1 {{ margin: 0; font-size: 20px; color: #8a5a1f; }}
+      .sub {{ margin: 3px 0; color: #666; font-size: 12px; }}
+      .badge {{ display: inline-block; padding: 3px 10px; border-radius: 10px;
+                font-size: 11px; font-weight: 700; background: #eee; color: #444; }}
+      .badge.requested {{ background: #fde9b8; color: #7a5a00; }}
+      .badge.approved {{ background: #d3e7fb; color: #15589c; }}
+      .badge.dispatched {{ background: #e3d5f7; color: #5b32a0; }}
+      .badge.received {{ background: #ead9c3; color: #6f481b; }}
+      .badge.rejected {{ background: #f7d3d0; color: #8c1d16; }}
+      .hint {{ color: #8a6d3b; margin: 0 0 12px; }}
+      .steps {{ display: flex; gap: 8px; margin-bottom: 16px; }}
+      .step {{ flex: 1; background: #faf7f0; border-left: 4px solid #d8c9a8;
+               padding: 7px 9px; border-radius: 0 4px 4px 0; }}
+      .step .label {{ display: block; font-size: 11px; font-weight: 700; color: #6b5a3a; }}
+      .step .date {{ display: block; margin-top: 3px; font-size: 10px; color: #8a6d3b; }}
+      .step.done {{ border-left-color: #6f481b; background: #f3e8d5; }}
+      .step.current {{ border-left-color: #8a5a1f; background: #fdf3dd; }}
+      .step.rejected {{ border-left-color: #b3261e; background: #fbeae8; }}
+      table {{ width: 100%; border-collapse: collapse; margin-bottom: 14px; }}
+      th, td {{ border: 1px solid #d8d0c0; padding: 7px 8px; text-align: left; }}
+      th {{ background: #f5efe2; color: #5a4626; }}
+      .r {{ text-align: right; }}
+      h2 {{ font-size: 13px; color: #8a5a1f; margin: 16px 0 8px; }}
+      .sign {{ margin-top: 34px; display: flex; gap: 70px; font-size: 11px; color: #444; }}
+      .sign div {{ border-top: 1px solid #999; padding-top: 6px; min-width: 220px; }}
+      .actions {{ display: flex; justify-content: flex-end; margin-bottom: 10px; }}
+      .actions button {{ border: 0; border-radius: 6px; background: #8a5a1f; color: #fff;
+                         padding: 9px 16px; font: 600 13px Arial, sans-serif; cursor: pointer; }}
+      @media print {{ body {{ margin: 10mm; }} .actions {{ display: none; }} }}
+    </style></head><body onload="window.print()">
+    <div class="actions"><button onclick="window.print()">Print</button></div>
+    <div class="head">
+      <div>
+        <h1>ISKCON Jamnagar Book Management</h1>
+        <div class="sub">Stock transfer &mdash; {escape(str(t['request_number']))}</div>
+        <div class="sub">Raised {escape(format_ist_datetime(t['requested_at']))}
+          by {escape(str(t['requested_by_name'] or 'unknown'))}</div>
+      </div>
+      <div><span class="badge {status}">{status.upper()}</span></div>
+    </div>
+    <p class="hint">{escape(_transfer_next_step(t['status']))}</p>
+    {_transfer_print_steps(t)}
+    <table>
+      <tr><th>Route</th><td colspan="3">{escape(str(t['from_name']))} &rarr; {escape(str(t['to_name']))}</td></tr>
+      <tr><th>Items</th><td colspan="3">{len(items)} line{'s' if len(items) != 1 else ''} &middot; {total_units} units</td></tr>
+      {note}
+    </table>
+    <h2>Books</h2>
+    <table>
+      <tr><th>Title</th><th>Barcode</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Value</th></tr>
+      {item_rows}
+      <tr><th colspan="2" class="r">Total</th><th class="r">{total_units}</th><th></th>
+        <th class="r">{total_value:.2f}</th></tr>
+    </table>
+    <div class="sign">
+      <div>Issued by (warehouse)</div>
+      <div>Received by (destination)</div>
+    </div>
+    </body></html>"""
+
+
+@router.get("/transfers/{transfer_id}/print", response_class=HTMLResponse)
+def print_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
+    data = _load_transfer(db, transfer_id)
+    if not _can_view_transfer(db, user, data):
+        raise HTTPException(403, "Forbidden")
+    return transfer_print_html(data)
 
 
 @router.delete("/transfers/{transfer_id}")

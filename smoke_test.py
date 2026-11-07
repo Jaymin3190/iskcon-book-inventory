@@ -471,6 +471,12 @@ check("pending receipts show who billed them", any(
     p["invoice_number"] == dist_cash["invoice_number"] and p["cashier_name"] == "Distributor"
     for p in pending
 ), pending)
+check("pending receipts expose cashier identity for the distributor filter", any(
+    p["invoice_number"] == dist_cash["invoice_number"]
+    and p.get("cashier_id") == dist_me["user"]["id"]
+    and p.get("cashier_role") == "distributor"
+    for p in pending
+), pending)
 
 zone_team_numbers = [zone_inv["invoice_number"], zone_inv3["invoice_number"],
                      dist_cash["invoice_number"], led["invoice_number"]]
@@ -711,6 +717,20 @@ check("transfer detail names the people at each step",
       and transfer_detail.get("dispatched_by_name") == "leader-temple-zone"
       and transfer_detail.get("received_by_name") == "leader-temple-zone",
       transfer_detail)
+req = urllib.request.Request(BASE + f"/api/stock/transfers/{tid}/print")
+req.add_header("Authorization", "Bearer " + zone_t)
+with urllib.request.urlopen(req) as resp:
+    transfer_print = resp.read().decode()
+    transfer_print_status = resp.status
+check("transfer print page renders in the detail layout",
+      transfer_print_status == 200
+      and "Stock transfer" in transfer_print
+      and transfer_detail["request_number"] in transfer_print
+      and "Books" in transfer_print
+      and all(item["title"] in transfer_print for item in transfer_detail["items"]),
+      transfer_print[:400])
+code, _ = call("GET", f"/api/stock/transfers/{tid}/print", token=other_zone_t)
+check("other zone cannot print the transfer", code == 403)
 code, rejected_transfer = call("POST", "/api/stock/transfers", token=zone_t, body={
     "from_location_id": 1, "to_location_id": 2, "items": [{"book_id": 1, "qty": 1}],
 })
