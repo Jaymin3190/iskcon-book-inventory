@@ -35,14 +35,23 @@ def next_receipt_number(db, user) -> str:
     return f"RCV-{_safe_name(user['username'], 'user' + str(user['id']))}-{seq:04d}"
 
 
+class PaymentAllocationIn(BaseModel):
+    invoice_number: str
+    amount: float
+
+
 class PaymentPreviewIn(BaseModel):
     user_id: int
-    receipt_numbers: list[str]
+    receipt_numbers: list[str] = []
+    amount: Optional[float] = None
+    allocations: Optional[list[PaymentAllocationIn]] = None
 
 
 class PaymentIn(BaseModel):
     user_id: int
-    receipt_numbers: list[str]
+    receipt_numbers: list[str] = []
+    amount: Optional[float] = None
+    allocations: Optional[list[PaymentAllocationIn]] = None
     note: Optional[str] = None
 
 
@@ -61,13 +70,124 @@ def _zone_admin(db, user_id: int, allowed_zone_ids: set):
     return row
 
 
-def _resolve_receipts(db, zone_user, numbers):
-    """Turn receipt numbers into handover lines, with friendly per-number errors.
+def _zone_cash_rows(db, zone_user):
+    """Every invoice in the zone with its customer-paid and handed-over cash."""
+    ids = zone_location_ids(db, zone_user["zone_id"])
+    placeholders = ",".join("?" * len(ids))
+    return db.execute(
+        f"""SELECT i.id, i.invoice_number, i.created_at, i.total, i.status, i.payment_mode,
+                   i.cashier_id, l.name AS location_name,
+                   u.name AS cashier_name, u.role AS cashier_role,
+                   u.zone_id AS cashier_zone_id,
+                   COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                              WHERE p.invoice_id = i.id),0) AS amount_paid,
+                   COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                              WHERE p.invoice_id = i.id AND p.method = 'cash'),0) AS cash_collected,
+                   COALESCE((SELECT SUM(c.amount) FROM cash_submission_items c
+                              WHERE c.invoice_id = i.id),0) AS cash_remitted
+              FROM invoices i
+              JOIN locations l ON l.id = i.location_id
+              LEFT JOIN users u ON u.id = i.cashier_id
+             WHERE i.location_id IN ({placeholders})
+             ORDER BY i.created_at, i.id""",
+        list(ids),
+    ).fetchall()
+
+
+def _cash_item(row):
+    total = round(float(row["total"] or 0), 2)
+    paid = round(float(row["amount_paid"] or 0), 2)
+    collected = round(float(row["cash_collected"] or 0), 2)
+    remitted = round(float(row["cash_remitted"] or 0), 2)
+    remittable = max(0, round(collected - remitted, 2))
+    return {
+        "invoice_id": row["id"],
+        "invoice_number": row["invoice_number"],
+        "created_at": row["created_at"],
+        "amount": remittable,
+        "invoice_total": total,
+        "amount_paid": paid,
+        "balance_due": max(0, round(total - paid, 2)),
+        "cash_collected": collected,
+        "cash_remitted": remitted,
+        "remittable": remittable,
+        "location_name": row["location_name"],
+        "cashier_id": row["cashier_id"],
+        "cashier_name": row["cashier_name"],
+        "cashier_role": row["cashier_role"],
+    }
+
+
+def _receipt_error(row, zone_id):
+    if row["cashier_role"] not in ("zone_admin", "distributor"):
+        return "was billed by the temple, not by the zone team"
+    if row["cashier_zone_id"] != zone_id:
+        return "belongs to another zone"
+    remittable = round(float(row["cash_collected"] or 0) - float(row["cash_remitted"] or 0), 2)
+    if remittable <= 0:
+        if float(row["cash_collected"] or 0) > 0:
+            return "has already been handed over to the temple"
+        return "has no cash collected yet"
+    return None
+
+
+def _resolve_receipts(db, zone_user, numbers, amount=None, allocations=None):
+    """Turn receipt numbers or a handed-over amount into allocation lines.
 
     A zone leader hands over the cash for the whole zone team, so a receipt may
-    have been billed by the leader or by any distributor in that zone. Temple and
-    super-admin bills are excluded because that cash is already with the temple.
+    have been billed by the leader or by any distributor in that zone. Only cash
+    that the zone team has actually collected and not yet handed over is
+    remittable; a bill can therefore be handed over in several instalments.
+
+    Without an amount the selected receipts are handed over in full. With an
+    amount, the money is allocated oldest-bill-first across the selected
+    receipts (or across the whole zone when no receipts are named).
     """
+    rows = _zone_cash_rows(db, zone_user)
+    by_number = {r["invoice_number"]: r for r in rows}
+    zone_id = zone_user["zone_id"]
+
+    def eligible(row):
+        return _receipt_error(row, zone_id) is None
+
+    def cash_item(row, allocated=None):
+        item = _cash_item(row)
+        if allocated is not None:
+            item["amount"] = max(0, round(float(allocated), 2))
+        return item
+
+    errors = []
+    if allocations:
+        if amount is not None:
+            return [], ["Choose either a handed-over amount or per-receipt amounts, not both"]
+        items = []
+        allocated_by_number = {}
+        for allocation in allocations:
+            number = str(allocation.invoice_number or "").strip()
+            row = by_number.get(number)
+            if not row:
+                errors.append(f"{number or 'Receipt'}: no such receipt in this zone")
+                continue
+            problem = _receipt_error(row, zone_id)
+            if problem:
+                errors.append(f"{number}: {problem}")
+                continue
+            requested = round(float(allocation.amount), 2)
+            if requested <= 0:
+                errors.append(f"{number}: handover amount must be positive")
+                continue
+            already = allocated_by_number.get(number, 0)
+            available = round(item_remittable(row) - already, 2)
+            if requested > available + 0.009:
+                errors.append(
+                    f"{number}: only {max(0, available):.2f} cash is available to hand over"
+                )
+                continue
+            allocated_by_number[number] = round(already + requested, 2)
+            items.append(cash_item(row, requested))
+        items.sort(key=lambda item: (item["created_at"] or "", item["invoice_id"]))
+        return items, errors
+
     unique = []
     seen = set()
     for raw in numbers:
@@ -75,51 +195,58 @@ def _resolve_receipts(db, zone_user, numbers):
         if number and number not in seen:
             seen.add(number)
             unique.append(number)
-    if not unique:
-        return [], ["Add at least one receipt number"]
 
-    ids = zone_location_ids(db, zone_user["zone_id"])
-    placeholders = ",".join("?" * len(ids))
-    rows = db.execute(
-        f"""SELECT i.id, i.invoice_number, i.created_at, i.total, i.payment_mode,
-                   i.cashier_id, l.name AS location_name,
-                   u.name AS cashier_name, u.role AS cashier_role,
-                   u.zone_id AS cashier_zone_id,
-                   (SELECT 1 FROM cash_submission_items c WHERE c.invoice_id = i.id) AS handed_over
-              FROM invoices i
-              JOIN locations l ON l.id = i.location_id
-              LEFT JOIN users u ON u.id = i.cashier_id
-             WHERE i.invoice_number IN ({",".join("?" * len(unique))})
-               AND i.location_id IN ({placeholders})""",
-        unique + list(ids),
-    ).fetchall()
-    by_number = {r["invoice_number"]: r for r in rows}
+    if amount is not None:
+        amount = round(float(amount), 2)
+        if amount <= 0:
+            return [], ["Handed-over amount must be positive"]
 
+    if unique:
+        candidates = []
+        for number in unique:
+            row = by_number.get(number)
+            if not row:
+                errors.append(f"{number}: no such receipt in this zone")
+                continue
+            problem = _receipt_error(row, zone_id)
+            if problem:
+                errors.append(f"{number}: {problem}")
+                continue
+            candidates.append(row)
+    elif amount is not None:
+        candidates = [row for row in rows if eligible(row)]
+    else:
+        return [], ["Add at least one receipt number or a handed-over amount"]
+
+    candidates.sort(key=lambda row: (row["created_at"] or "", row["id"]))
     items = []
-    errors = []
-    for number in unique:
-        row = by_number.get(number)
-        if not row:
-            errors.append(f"{number}: no such receipt in this zone")
-        elif row["payment_mode"] != "cash":
-            errors.append(f"{number}: is a {row['payment_mode'].upper()} receipt, not cash")
-        elif row["handed_over"]:
-            errors.append(f"{number}: already handed over to the temple")
-        elif row["cashier_role"] not in ("zone_admin", "distributor"):
-            errors.append(f"{number}: was billed by the temple, not by the zone team")
-        elif row["cashier_zone_id"] != zone_user["zone_id"]:
-            errors.append(f"{number}: belongs to another zone")
-        else:
-            items.append({
-                "invoice_id": row["id"],
-                "invoice_number": row["invoice_number"],
-                "created_at": row["created_at"],
-                "amount": round(float(row["total"]), 2),
-                "location_name": row["location_name"],
-                "cashier_name": row["cashier_name"],
-                "cashier_role": row["cashier_role"],
-            })
+    remaining = amount
+    for row in candidates:
+        available = item_remittable(row)
+        if amount is None:
+            items.append(cash_item(row, available))
+            continue
+        if remaining <= 0:
+            break
+        allocated = min(available, remaining)
+        if allocated > 0:
+            items.append(cash_item(row, allocated))
+            remaining = round(remaining - allocated, 2)
+
+    if amount is not None and remaining > 0.009:
+        available = round(sum(item_remittable(row) for row in candidates), 2)
+        errors.append(
+            f"Handed-over amount is {amount - remaining:.2f} more than the "
+            f"available cash of {available:.2f}"
+        )
     return items, errors
+
+
+def item_remittable(row):
+    return max(
+        0,
+        round(float(row["cash_collected"] or 0) - float(row["cash_remitted"] or 0), 2),
+    )
 
 
 def _submission_detail(db, payment_id: int):
@@ -137,7 +264,9 @@ def _submission_detail(db, payment_id: int):
     if not row:
         return None
     items = db.execute(
-        """SELECT csi.invoice_number, csi.amount, i.created_at,
+        """SELECT csi.invoice_number, csi.amount, i.created_at, i.total AS invoice_total,
+                  COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                             WHERE p.invoice_id = i.id),0) AS amount_paid,
                   l.name AS location_name,
                   u.name AS cashier_name, u.role AS cashier_role
              FROM cash_submission_items csi
@@ -149,7 +278,19 @@ def _submission_detail(db, payment_id: int):
         (payment_id,),
     ).fetchall()
     data = dict(row)
-    data["items"] = [dict(it) for it in items]
+    item_rows = []
+    for item in items:
+        item_data = dict(item)
+        item_data["balance_due"] = max(
+            0,
+            round(
+                float(item_data["invoice_total"] or 0)
+                - float(item_data["amount_paid"] or 0),
+                2,
+            ),
+        )
+        item_rows.append(item_data)
+    data["items"] = item_rows
     return data
 
 
@@ -188,50 +329,59 @@ def pending_receipts(user_id: int, db=Depends(get_db), user=Depends(require_role
     else:
         zone_user = _zone_admin(db, user_id, payment_zone_ids(db, user))
 
-    ids = zone_location_ids(db, zone_user["zone_id"])
-    rows = db.execute(
-        """SELECT i.id, i.invoice_number, i.created_at, i.total,
-                  l.name AS location_name,
-                  u.id AS cashier_id, u.name AS cashier_name, u.role AS cashier_role
-             FROM invoices i
-             JOIN locations l ON l.id = i.location_id
-             LEFT JOIN users u ON u.id = i.cashier_id
-            WHERE i.payment_mode = 'cash'
-              AND i.location_id IN ({})
-              AND u.role IN ('zone_admin', 'distributor')
-              AND u.zone_id = ?
-              AND NOT EXISTS (SELECT 1 FROM cash_submission_items c WHERE c.invoice_id = i.id)
-            ORDER BY i.id""".format(",".join("?" * len(ids))),
-        list(ids) + [zone_user["zone_id"]],
-    ).fetchall()
-    return [dict(r) for r in rows]
+    pending = []
+    for row in _zone_cash_rows(db, zone_user):
+        if row["status"] in ("pending", "failed"):
+            continue
+        if _receipt_error(row, zone_user["zone_id"]) is not None:
+            continue
+        pending.append(_cash_item(row))
+    return pending
 
 
 @router.post("/preview")
 def preview_payment(data: PaymentPreviewIn, db=Depends(get_db), user=Depends(require_roles(*RECORD_ROLES))):
-    """Auto-sum entered receipt numbers so the temple admin can verify the cash."""
+    """Auto-sum entered receipts or allocate a handed-over amount."""
     zone_user = _zone_admin(db, data.user_id, payment_zone_ids(db, user))
-    items, errors = _resolve_receipts(db, zone_user, data.receipt_numbers)
+    items, errors = _resolve_receipts(
+        db, zone_user, data.receipt_numbers, data.amount, data.allocations
+    )
     return {
         "items": items,
         "errors": errors,
         "count": len(items),
         "total": round(sum(i["amount"] for i in items), 2),
+        "available": round(
+            sum(
+                item_remittable(row)
+                for row in _zone_cash_rows(db, zone_user)
+                if _receipt_error(row, zone_user["zone_id"]) is None
+            ),
+            2,
+        ),
     }
 
 
 @router.post("")
 def create_payment(data: PaymentIn, db=Depends(get_db), user=Depends(require_roles(*RECORD_ROLES))):
     zone_user = _zone_admin(db, data.user_id, payment_zone_ids(db, user))
-    items, errors = _resolve_receipts(db, zone_user, data.receipt_numbers)
-    if errors:
-        raise HTTPException(400, " ".join(errors))
-    if not items:
-        raise HTTPException(400, "Add at least one receipt number")
-
-    total = round(sum(i["amount"] for i in items), 2)
-    number = next_receipt_number(db, user)
     try:
+        db.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as error:
+        raise HTTPException(409, "Another payment-in is being recorded. Try again.") from error
+    try:
+        items, errors = _resolve_receipts(
+            db, zone_user, data.receipt_numbers, data.amount, data.allocations
+        )
+        if errors:
+            db.rollback()
+            raise HTTPException(400, " ".join(errors))
+        if not items:
+            db.rollback()
+            raise HTTPException(400, "Add a receipt number or a handed-over amount")
+
+        total = round(sum(i["amount"] for i in items), 2)
+        number = next_receipt_number(db, user)
         cur = db.execute(
             """INSERT INTO cash_submissions
                    (receipt_number, zone_id, submitted_by, recorded_by,
@@ -249,9 +399,12 @@ def create_payment(data: PaymentIn, db=Depends(get_db), user=Depends(require_rol
                 (payment_id, it["invoice_id"], it["invoice_number"], it["amount"]),
             )
         db.commit()
-    except sqlite3.IntegrityError:
+    except HTTPException:
         db.rollback()
-        raise HTTPException(409, "One of those receipts was just handed over by someone else. Reload and try again.")
+        raise
+    except sqlite3.Error:
+        db.rollback()
+        raise
 
     log_audit(
         db, user["id"], "PAYMENT_IN", "cash_submissions", payment_id,
@@ -288,7 +441,10 @@ def receipt_html(payment) -> str:
         f"<tr><td>{escape(str(it['invoice_number']))}</td>"
         f"<td>{escape(str(it.get('cashier_name') or '-'))}</td>"
         f"<td>{escape(format_ist_datetime(it['created_at']))}</td>"
-        f"<td class='r'>{float(it['amount']):.2f}</td></tr>"
+        f"<td class='r'>{float(it.get('invoice_total') or 0):.2f}</td>"
+        f"<td class='r'>{float(it.get('amount_paid') or 0):.2f}</td>"
+        f"<td class='r'>{float(it['amount']):.2f}</td>"
+        f"<td class='r'>{float(it.get('balance_due') or 0):.2f}</td></tr>"
         for it in payment["items"]
     )
     note = (
@@ -321,14 +477,17 @@ def receipt_html(payment) -> str:
     <p class="sub">Zone: {escape(str(payment['zone_name']))}
       &nbsp;|&nbsp; Confirmed by: {escape(str(payment['recorded_by_name']))}</p>
     <table>
-      <tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th class="r">Amount</th></tr>
+      <tr><th>Receipt</th><th>Billed by</th><th>Billed at</th>
+        <th class="r">Invoice total</th><th class="r">Invoice paid</th>
+        <th class="r">This handover</th><th class="r">Balance due</th></tr>
       {rows}
-      <tr class="total"><td colspan="3" class="r">Total cash received</td>
-        <td class="r">{float(payment['amount']):.2f}</td></tr>
+      <tr class="total"><td colspan="5" class="r">Total cash received</td>
+        <td class="r">{float(payment['amount']):.2f}</td><td></td></tr>
     </table>
     {note}
-    <p class="sub">This receipt confirms that the temple has received the cash for the
-      bills listed above. Status: {escape(str(payment['status']).upper())}.</p>
+    <p class="sub">This receipt confirms that the temple has received the cash shown above.
+      A bill may still have a customer balance due; that remains with the zone team.
+      Status: {escape(str(payment['status']).upper())}.</p>
     <div class="sign">
       <div>Received by (temple)</div>
       <div>Handed over by (zone leader)</div>

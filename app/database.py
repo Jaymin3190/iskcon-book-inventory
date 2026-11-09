@@ -184,10 +184,22 @@ CREATE TABLE IF NOT EXISTS cash_submissions (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS invoice_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+    amount NUMERIC NOT NULL,
+    method TEXT NOT NULL,
+    reference TEXT,
+    received_by INTEGER REFERENCES users(id),
+    received_at TEXT NOT NULL DEFAULT (datetime('now')),
+    cash_submission_id INTEGER REFERENCES cash_submissions(id),
+    note TEXT
+);
+
 CREATE TABLE IF NOT EXISTS cash_submission_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     submission_id INTEGER NOT NULL REFERENCES cash_submissions(id),
-    invoice_id INTEGER NOT NULL UNIQUE REFERENCES invoices(id),
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id),
     invoice_number TEXT NOT NULL,
     amount NUMERIC NOT NULL
 );
@@ -299,6 +311,80 @@ def _migrate_invoice_distributor(conn):
     )
 
 
+def _migrate_invoice_payments(conn):
+    """Add the payment ledger and give every historically paid invoice its entry.
+
+    Before this ledger an invoice was simply ``paid``; without a backfilled
+    payment row every old bill would suddenly look like it still owes money.
+    """
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS invoice_payments (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+               amount NUMERIC NOT NULL,
+               method TEXT NOT NULL,
+               reference TEXT,
+               received_by INTEGER REFERENCES users(id),
+               received_at TEXT NOT NULL DEFAULT (datetime('now')),
+               cash_submission_id INTEGER REFERENCES cash_submissions(id),
+               note TEXT
+           )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invoice_payments_invoice ON invoice_payments(invoice_id)"
+    )
+    conn.execute(
+        """INSERT INTO invoice_payments
+               (invoice_id, amount, method, reference, received_by, received_at, note)
+           SELECT i.id, i.total,
+                  CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'upi'
+                       ELSE i.payment_mode END,
+                  i.payment_ref, i.cashier_id, i.created_at,
+                  'Backfilled from an existing paid invoice'
+             FROM invoices i
+            WHERE i.status = 'paid' AND i.total > 0
+              AND NOT EXISTS (SELECT 1 FROM invoice_payments p WHERE p.invoice_id = i.id)"""
+    )
+
+
+def _has_unique_invoice_index(conn) -> bool:
+    for index in conn.execute("PRAGMA index_list(cash_submission_items)").fetchall():
+        # PRAGMA index_list: seq, name, unique, origin, partial
+        if not index[2]:
+            continue
+        columns = [
+            row[2]
+            for row in conn.execute(f"PRAGMA index_info('{index[1]}')").fetchall()
+        ]
+        if columns == ["invoice_id"]:
+            return True
+    return False
+
+
+def _migrate_cash_submission_items(conn):
+    """Allow one invoice to be handed over in several partial remittances."""
+    if not _has_unique_invoice_index(conn):
+        return
+    conn.execute("ALTER TABLE cash_submission_items RENAME TO cash_submission_items_legacy")
+    conn.execute(
+        """CREATE TABLE cash_submission_items (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               submission_id INTEGER NOT NULL REFERENCES cash_submissions(id),
+               invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+               invoice_number TEXT NOT NULL,
+               amount NUMERIC NOT NULL
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO cash_submission_items
+               (id, submission_id, invoice_id, invoice_number, amount)
+           SELECT id, submission_id, invoice_id, invoice_number, amount
+             FROM cash_submission_items_legacy"""
+    )
+    conn.execute("DROP TABLE cash_submission_items_legacy")
+
+
+
 def _migrate_transfer_numbers(conn):
     """Use short, human-friendly request numbers such as TRF-0001."""
     for row in conn.execute("SELECT id, request_number FROM transfers").fetchall():
@@ -318,6 +404,8 @@ def init_db():
     _migrate_razorpay(conn)
     _migrate_invoice_share_tokens(conn)
     _migrate_invoice_distributor(conn)
+    _migrate_invoice_payments(conn)
+    _migrate_cash_submission_items(conn)
     _migrate_transfer_numbers(conn)
     conn.commit()
     conn.close()

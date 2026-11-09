@@ -259,6 +259,11 @@ table tr[hidden] { display: none !important; }
 .badge.processed { background: #ead9c3; color: #6f481b; }
 .badge.open { background: #fde9b8; color: #7a5a00; }
 .badge.completed { background: #ead9c3; color: #6f481b; }
+.badge.paid { background: #d6f2dd; color: #17693a; }
+.badge.partial { background: #fde9b8; color: #7a5a00; }
+.badge.unpaid { background: #f7d3d0; color: #8c1d16; }
+.badge.pending { background: #d3e7fb; color: #15589c; }
+.badge.failed { background: #e2e2e2; color: #555; }
 
 /* Transfer progress timeline */
 .transfer-steps {

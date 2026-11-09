@@ -156,7 +156,7 @@ class RazorpayIntegrationTests(unittest.TestCase):
             pos.get_invoice(result["invoice_id"], db=self.db, user=distributor)
         self.assertEqual(raised.exception.status_code, 403)
 
-    def test_distributor_attribution_is_super_admin_only_and_warehouse_only(self):
+    def test_distributor_attribution_requires_a_privileged_user_and_matching_zone(self):
         data = pos.InvoiceIn(
             location_id=2,
             distributor_id=2,
@@ -169,9 +169,13 @@ class RazorpayIntegrationTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 403)
 
         admin = self.db.execute("SELECT * FROM users WHERE id = 3").fetchone()
-        with self.assertRaises(HTTPException) as raised:
-            pos.create_invoice(data, db=self.db, user=admin)
-        self.assertEqual(raised.exception.status_code, 400)
+        result = pos.create_invoice(data, db=self.db, user=admin)
+        invoice = self.db.execute(
+            "SELECT location_id, distributor_id, cashier_id FROM invoices WHERE id = ?",
+            (result["invoice_id"],),
+        ).fetchone()
+        self.assertEqual(tuple(invoice), (2, 2, 3))
+        self.assertEqual(result["status"], "paid")
 
     def test_razorpay_is_rejected_without_razorpay_credentials(self):
         data = pos.InvoiceIn(

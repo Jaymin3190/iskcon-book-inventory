@@ -908,5 +908,170 @@ check("received transfer stock can be consumed before deletion", code == 200)
 code, _ = call("DELETE", f"/api/stock/transfers/{consumed_transfer_id}", token=super_t)
 check("received transfer deletion is blocked when destination stock is consumed", code == 409)
 
+# --- partial payments: godown deposit and later balance ---
+_, all_books = call("GET", "/api/books", token=super_t)
+book_seven = next(b for b in all_books if b["barcode"] == "9780892131565")
+godown_total = round(float(book_seven["price"]) * 2, 2)
+
+code, deposit = call("POST", "/api/pos/invoices", token=super_t, body={
+    "location_id": 1, "customer_name": "Godown Deposit", "customer_phone": "9999999999",
+    "payment_mode": "cash", "amount_received": 80,
+    "items": [{"barcode": book_seven["barcode"], "qty": 2}],
+})
+check("godown sale accepts a partial deposit", code == 200
+      and deposit["total"] == godown_total and deposit["amount_paid"] == 80.0
+      and deposit["balance_due"] == godown_total - 80 and deposit["status"] == "partial", deposit)
+
+code, deposit_detail = call("GET", f"/api/pos/invoices/{deposit['invoice_id']}", token=super_t)
+check("partial invoice detail shows the payment ledger", code == 200
+      and len(deposit_detail["payments"]) == 1
+      and deposit_detail["payments"][0]["amount"] == 80.0
+      and deposit_detail["amount_paid"] == 80.0
+      and deposit_detail["balance_due"] == godown_total - 80, deposit_detail)
+
+try:
+    with urllib.request.urlopen(
+        f"{BASE}/i/{deposit['share_token']}"
+    ) as resp:
+        partial_public_status = resp.status
+        partial_public_body = resp.read().decode()
+except urllib.error.HTTPError as error:
+    partial_public_status = error.code
+    partial_public_body = ""
+check("partial invoice public link opens", partial_public_status == 200
+      and "balance due" in partial_public_body.lower())
+
+req = urllib.request.Request(f"{BASE}/api/pos/invoices/{deposit['invoice_id']}/print")
+req.add_header("Authorization", "Bearer " + super_t)
+with urllib.request.urlopen(req) as resp:
+    partial_print_body = resp.read().decode()
+check("partial invoice prints with a balance", "Balance due" in partial_print_body)
+
+code, _ = call("PATCH", f"/api/pos/invoices/{deposit['invoice_id']}", token=super_t, body={
+    "discount": 10,
+})
+check("partially paid invoice amounts are locked", code == 409)
+
+code, over_payment = call("POST", f"/api/pos/invoices/{deposit['invoice_id']}/payments", token=super_t, body={
+    "amount": godown_total, "method": "cash",
+})
+check("invoice payment rejects more than the balance", code == 400, over_payment)
+
+code, paid_balance = call("POST", f"/api/pos/invoices/{deposit['invoice_id']}/payments", token=super_t, body={
+    "amount": godown_total - 80, "method": "upi", "reference": "UPI-BALANCE",
+})
+check("godown balance can be collected later", code == 200
+      and paid_balance["status"] == "paid" and paid_balance["balance_due"] == 0, paid_balance)
+
+_, sales_after_partials = call("GET", "/api/reports/sales", token=super_t)
+warehouse_sales = next((row for row in sales_after_partials if row["location_id"] == 1), {})
+check("sales report exposes collected and outstanding", warehouse_sales.get("collected", 0) >= godown_total
+      and abs(float(warehouse_sales.get("outstanding", -1))
+              - max(0, float(warehouse_sales.get("revenue", 0)) - float(warehouse_sales.get("collected", 0)))) < 0.01,
+      warehouse_sales)
+
+# --- distributor credit sale and a partial cash handover ---
+_, warehouse_rows_now = call("GET", "/api/stock?location_id=1", token=super_t)
+books_by_id = {b["id"]: b for b in all_books}
+credit_book = next(
+    (books_by_id[row["book_id"]] for row in warehouse_rows_now
+     if row["qty"] >= 5 and row["book_id"] in books_by_id
+     and books_by_id[row["book_id"]]["barcode"] != book_seven["barcode"]),
+    book_seven,
+)
+code, topup = call("POST", "/api/stock/transfers", token=super_t, body={
+    "from_location_id": 1, "to_location_id": 2,
+    "items": [{"book_id": credit_book["id"], "qty": 5}],
+})
+topup_id = topup.get("id")
+call("POST", f"/api/stock/transfers/{topup_id}/approve", token=super_t)
+call("POST", f"/api/stock/transfers/{topup_id}/dispatch", token=super_t)
+call("POST", f"/api/stock/transfers/{topup_id}/receive", token=super_t)
+check("stock moved to the zone for the credit sale", code == 200, topup)
+
+code, credit = call("POST", "/api/pos/invoices", token=dist_t, body={
+    "customer_name": "Credit Customer", "customer_phone": "9999999999",
+    "payment_mode": "ledger",
+    "items": [{"barcode": credit_book["barcode"], "qty": 1}],
+})
+check("distributor credit sale is unpaid at billing", code == 200
+      and credit["status"] == "unpaid" and credit["amount_paid"] == 0
+      and credit["balance_due"] == credit["total"], credit)
+
+code, credit_detail = call("GET", f"/api/pos/invoices/{credit['invoice_id']}", token=dist_t)
+check("credit invoice starts with no payment rows", code == 200
+      and credit_detail["payments"] == [] and credit_detail["balance_due"] == credit["total"], credit_detail)
+
+code, credit_payment = call("POST", f"/api/pos/invoices/{credit['invoice_id']}/payments", token=dist_t, body={
+    "amount": 50, "method": "cash", "note": "Collected from customer",
+})
+check("distributor can record a cash payment on credit", code == 200
+      and credit_payment["status"] == "partial"
+      and credit_payment["amount_paid"] == 50
+      and credit_payment["balance_due"] == credit["total"] - 50, credit_payment)
+
+_, dist_after_credit = call("GET", f"/api/reports/distributors/{dist_me['user']['id']}", token=zone_t)
+credit_row = next((row for row in dist_after_credit["invoices"] if row["id"] == credit["invoice_id"]), {})
+check("distributor report shows the credit balance", credit_row.get("amount_paid") == 50
+      and credit_row.get("balance_due") == credit["total"] - 50
+      and dist_after_credit["summary"]["outstanding"] >= credit["total"] - 50, credit_row)
+
+code, pending_credit = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
+credit_pending = next((row for row in pending_credit if row["invoice_number"] == credit["invoice_number"]), {})
+check("cash collected on credit is remittable", code == 200
+      and credit_pending.get("remittable") == 50
+      and credit_pending.get("cash_collected") == 50
+      and credit_pending.get("cash_remitted") == 0, credit_pending)
+
+code, partial_preview = call("POST", "/api/payments/preview", token=temple_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [credit["invoice_number"]], "amount": 20,
+})
+check("payment in allocates a partial amount to a receipt", code == 200
+      and partial_preview["total"] == 20 and partial_preview["count"] == 1
+      and partial_preview["items"][0]["amount"] == 20
+      and not partial_preview["errors"], partial_preview)
+
+code, allocation_preview = call("POST", "/api/payments/preview", token=temple_t, body={
+    "user_id": zone_user_id, "amount": 20,
+})
+check("payment in allocates an amount without receipt numbers", code == 200
+      and allocation_preview["total"] == 20 and allocation_preview["count"] >= 1
+      and not allocation_preview["errors"], allocation_preview)
+
+code, over_remit = call("POST", "/api/payments", token=temple_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [credit["invoice_number"]], "amount": 60,
+})
+check("payment in rejects handing over more cash than collected", code == 400, over_remit)
+
+code, first_handover = call("POST", "/api/payments", token=temple_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [credit["invoice_number"]], "amount": 20,
+})
+check("first partial cash handover is recorded", code == 200
+      and first_handover["amount"] == 20
+      and first_handover["items"][0]["amount"] == 20
+      and first_handover["items"][0]["amount_paid"] == 50
+      and first_handover["items"][0]["balance_due"] == credit["total"] - 50, first_handover)
+
+_, pending_partial = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
+credit_remaining = next((row for row in pending_partial if row["invoice_number"] == credit["invoice_number"]), {})
+check("partially handed-over cash stays remittable", credit_remaining.get("remittable") == 30
+      and credit_remaining.get("cash_remitted") == 20, credit_remaining)
+
+code, second_handover = call("POST", "/api/payments", token=temple_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [credit["invoice_number"]], "amount": 30,
+})
+check("second partial cash handover is recorded", code == 200
+      and second_handover["amount"] == 30 and second_handover["items"][0]["amount"] == 30, second_handover)
+
+_, pending_done = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
+check("fully handed-over cash leaves the pending list",
+      not any(row["invoice_number"] == credit["invoice_number"] for row in pending_done), pending_done)
+
+code, credit_handover_detail = call("GET", f"/api/payments/{second_handover['id']}", token=temple_t)
+check("cash receipt shows invoice paid and customer balance", code == 200
+      and credit_handover_detail["items"][0]["amount_paid"] == 50
+      and credit_handover_detail["items"][0]["balance_due"] == credit["total"] - 50,
+      credit_handover_detail)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

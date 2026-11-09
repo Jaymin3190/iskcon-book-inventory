@@ -10,16 +10,33 @@ from ..services.timezone import now_ist
 
 router = APIRouter(tags=["reports"])
 
+SETTLED_SQL = "('paid','partial','unpaid')"
+
+
+def _with_outstanding(rows):
+    result = []
+    for row in rows:
+        data = dict(row)
+        data["outstanding"] = max(
+            0,
+            round(float(data.get("revenue") or 0) - float(data.get("collected") or 0), 2),
+        )
+        result.append(data)
+    return result
+
 
 @router.get("/api/reports/sales")
 def sales_report(frm: str = None, to: str = None, location_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = invoice_location_ids(db, user)
     sql = """SELECT i.location_id, l.code AS location_code, l.name AS location_name,
                     COUNT(*) AS invoice_count, COALESCE(SUM(i.total),0) AS revenue,
-                    COALESCE(SUM(i.subtotal),0) AS subtotal, COALESCE(SUM(i.discount),0) AS discount
+                    COALESCE(SUM(i.subtotal),0) AS subtotal, COALESCE(SUM(i.discount),0) AS discount,
+                    COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM invoice_payments p
+                                   WHERE p.invoice_id = i.id)),0) AS collected
              FROM invoices i
              JOIN locations l ON l.id = i.location_id
-             WHERE i.location_id IN ({}) AND i.status = 'paid'""".format(",".join("?" * len(ids)))
+             WHERE i.location_id IN ({}) AND i.status IN {settled}""".format(
+                 ",".join("?" * len(ids)), settled=SETTLED_SQL)
     params = list(ids)
     if frm:
         sql += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
@@ -33,7 +50,7 @@ def sales_report(frm: str = None, to: str = None, location_id: int = None, db=De
         sql += " AND i.location_id = ?"
         params.append(location_id)
     sql += " GROUP BY i.location_id"
-    return [dict(r) for r in db.execute(sql, params).fetchall()]
+    return _with_outstanding(db.execute(sql, params).fetchall())
 
 
 @router.get("/api/reports/sales-by-book")
@@ -46,7 +63,7 @@ def sales_by_book(frm: str = None, to: str = None, location_id: int = None, db=D
              FROM invoice_items ii
              JOIN invoices i ON i.id = ii.invoice_id
              JOIN books b ON b.id = ii.book_id
-             WHERE i.location_id IN ({}) AND i.status = 'paid'""".format(",".join("?" * len(ids)))
+             WHERE i.location_id IN ({}) AND i.status IN ('paid','partial','unpaid')""".format(",".join("?" * len(ids)))
     params = list(ids)
     if location_id is not None:
         sql += " AND i.location_id = ?"
@@ -79,7 +96,7 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
              JOIN locations l ON l.id = i.location_id
              JOIN invoice_items ii ON ii.invoice_id = i.id
              JOIN books b ON b.id = ii.book_id
-             WHERE i.location_id IN ({}) AND i.status = 'paid'""".format(",".join("?" * len(ids)))
+             WHERE i.location_id IN ({}) AND i.status IN ('paid','partial','unpaid')""".format(",".join("?" * len(ids)))
     params = list(ids)
     if has_role(user, "zone_admin"):
         sql += " AND u.zone_id = ?"
@@ -168,7 +185,7 @@ def daily_zone_sales(days: int = 14, db=Depends(get_db), user=Depends(require_ro
               FROM invoices i
               JOIN tree t ON t.id = i.location_id
               JOIN invoice_items ii ON ii.invoice_id = i.id
-             WHERE i.status = 'paid'
+             WHERE i.status IN ('paid','partial','unpaid')
                AND t.root_id IN ({zone_placeholders})
                AND date(i.created_at, '+5 hours', '+30 minutes') >= ?
              GROUP BY day, t.root_id
@@ -224,11 +241,14 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                    SELECT t.root_id,
                           COUNT(*) AS invoice_count,
                           COALESCE(SUM(i.total),0) AS revenue,
+                          COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM invoice_payments p
+                                         WHERE p.invoice_id = i.id)),0) AS collected,
                           COALESCE(SUM(CASE WHEN i.payment_mode = 'cash' THEN i.total ELSE 0 END),0) AS cash_total,
                           COALESCE(SUM(CASE WHEN i.payment_mode = 'upi' AND i.razorpay_qr_code_id IS NULL THEN i.total ELSE 0 END),0) AS upi_total,
-                          COALESCE(SUM(CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN i.total ELSE 0 END),0) AS razorpay_total
+                          COALESCE(SUM(CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN i.total ELSE 0 END),0) AS razorpay_total,
+                          COALESCE(SUM(CASE WHEN i.payment_mode = 'ledger' THEN i.total ELSE 0 END),0) AS ledger_total
                      FROM invoices i JOIN tree t ON t.id = i.location_id
-                    WHERE i.status = 'paid'
+                    WHERE i.status IN ('paid','partial','unpaid')
                     GROUP BY t.root_id
                ),
                sold_agg AS (
@@ -236,7 +256,7 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                      FROM invoices i
                      JOIN tree t ON t.id = i.location_id
                      JOIN invoice_items ii ON ii.invoice_id = i.id
-                    WHERE i.status = 'paid'
+                    WHERE i.status IN ('paid','partial','unpaid')
                     GROUP BY t.root_id
                )
              SELECT l.id, l.code, l.name,
@@ -249,9 +269,12 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                       WHERE u.role = 'distributor' AND u.zone_id = l.id AND u.is_active = 1) AS distributor_count,
                     COALESCE(ia.invoice_count,0) AS invoice_count,
                     COALESCE(ia.revenue,0) AS revenue,
+                    COALESCE(ia.collected,0) AS collected,
+                    COALESCE(ia.revenue,0) - COALESCE(ia.collected,0) AS outstanding,
                     COALESCE(ia.cash_total,0) AS cash_total,
                     COALESCE(ia.upi_total,0) AS upi_total,
                     COALESCE(ia.razorpay_total,0) AS razorpay_total,
+                    COALESCE(ia.ledger_total,0) AS ledger_total,
                     COALESCE(sa.books_sold,0) AS books_sold
              FROM locations l
              LEFT JOIN invoice_agg ia ON ia.root_id = l.id
@@ -273,6 +296,8 @@ def zone_invoices(zone_id: int, db=Depends(get_db), user=Depends(require_roles("
                     CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
                          ELSE i.payment_mode END AS payment_mode,
                     i.payment_ref, i.status, i.total,
+                    COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                               WHERE p.invoice_id = i.id),0) AS amount_paid,
                     l.name AS location_name,
                     u.name AS cashier_name, u.username AS cashier_username,
                     (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
@@ -281,7 +306,14 @@ def zone_invoices(zone_id: int, db=Depends(get_db), user=Depends(require_roles("
              LEFT JOIN users u ON u.id = i.cashier_id
              WHERE i.location_id IN ({})
              ORDER BY i.id DESC""".format(",".join("?" * len(ids)))
-    return [dict(r) for r in db.execute(sql, list(ids)).fetchall()]
+    rows = []
+    for row in db.execute(sql, list(ids)).fetchall():
+        data = dict(row)
+        data["balance_due"] = max(
+            0, round(float(data["total"] or 0) - float(data["amount_paid"] or 0), 2)
+        )
+        rows.append(data)
+    return rows
 
 
 @router.get("/api/reports/distributors")
@@ -303,33 +335,47 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
                      l.name AS zone_name,
                      (SELECT COUNT(*) FROM invoices i
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
-                         AND i.status = 'paid') AS invoice_count,
+                         AND i.status IN {SETTLED_SQL}) AS invoice_count,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
-                         AND i.status = 'paid') AS revenue,
+                         AND i.status IN {SETTLED_SQL}) AS revenue,
+                     (SELECT COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM invoice_payments p
+                                            WHERE p.invoice_id = i.id)),0) FROM invoices i
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.status IN {SETTLED_SQL}) AS collected,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
-                         AND i.payment_mode = 'cash' AND i.status = 'paid') AS cash_total,
+                         AND i.payment_mode = 'cash' AND i.status IN {SETTLED_SQL}) AS cash_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
                          AND i.payment_mode = 'upi'
-                         AND i.razorpay_qr_code_id IS NULL AND i.status = 'paid') AS upi_total,
+                         AND i.razorpay_qr_code_id IS NULL AND i.status IN {SETTLED_SQL}) AS upi_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
                          AND i.razorpay_qr_code_id IS NOT NULL
-                         AND i.status = 'paid') AS razorpay_total,
+                         AND i.status IN {SETTLED_SQL}) AS razorpay_total,
+                     (SELECT COALESCE(SUM(i.total),0) FROM invoices i
+                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                         AND i.payment_mode = 'ledger' AND i.status IN {SETTLED_SQL}) AS ledger_total,
                      (SELECT COALESCE(SUM(ii.qty),0)
                         FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
-                         AND i.status = 'paid') AS books_sold,
+                         AND i.status IN {SETTLED_SQL}) AS books_sold,
                      (SELECT MAX(i.created_at) FROM invoices i
                        WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
-                         AND i.status = 'paid') AS last_sale
+                         AND i.status IN {SETTLED_SQL}) AS last_sale
               FROM users u
               LEFT JOIN locations l ON l.id = u.zone_id
               WHERE {where}
               ORDER BY l.name, u.name"""
-    return [dict(r) for r in db.execute(sql, params).fetchall()]
+    rows = []
+    for row in db.execute(sql, params).fetchall():
+        data = dict(row)
+        data["outstanding"] = max(
+            0, round(float(data["revenue"] or 0) - float(data["collected"] or 0), 2)
+        )
+        rows.append(data)
+    return rows
 
 
 @router.get("/api/reports/distributors/{user_id}")
@@ -349,21 +395,24 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
         raise HTTPException(403, "Forbidden")
 
     summary = db.execute(
-        """SELECT COUNT(*) AS invoice_count,
+        f"""SELECT COUNT(*) AS invoice_count,
                   COALESCE(SUM(total),0) AS revenue,
                   COALESCE(SUM(subtotal),0) AS subtotal,
                   COALESCE(SUM(discount),0) AS discount,
+                  COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM invoice_payments p
+                                 WHERE p.invoice_id = invoices.id)),0) AS collected,
                   COALESCE(SUM(CASE WHEN payment_mode = 'cash' THEN total ELSE 0 END),0) AS cash_total,
                   COALESCE(SUM(CASE WHEN payment_mode = 'upi' AND razorpay_qr_code_id IS NULL THEN total ELSE 0 END),0) AS upi_total,
                   COALESCE(SUM(CASE WHEN razorpay_qr_code_id IS NOT NULL THEN total ELSE 0 END),0) AS razorpay_total,
+                  COALESCE(SUM(CASE WHEN payment_mode = 'ledger' THEN total ELSE 0 END),0) AS ledger_total,
                   COALESCE((SELECT SUM(ii.qty) FROM invoice_items ii
                               JOIN invoices i2 ON i2.id = ii.invoice_id
                              WHERE (i2.distributor_id = ? OR (i2.distributor_id IS NULL AND i2.cashier_id = ?))
-                               AND i2.status = 'paid'),0) AS books_sold,
+                               AND i2.status IN {SETTLED_SQL}),0) AS books_sold,
                   MAX(created_at) AS last_sale
            FROM invoices
            WHERE (distributor_id = ? OR (distributor_id IS NULL AND cashier_id = ?))
-             AND status = 'paid'""",
+             AND status IN {SETTLED_SQL}""",
         (user_id, user_id, user_id, user_id),
     ).fetchone()
 
@@ -372,6 +421,8 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
                   CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
                        ELSE i.payment_mode END AS payment_mode,
                   i.payment_ref, i.status, i.subtotal, i.discount, i.total,
+                  COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                             WHERE p.invoice_id = i.id),0) AS amount_paid,
                   l.name AS location_name,
                   (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS line_count,
                   (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
@@ -382,22 +433,35 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
     ).fetchall()
 
     books = db.execute(
-        """SELECT b.id AS book_id, b.title, b.barcode,
+        f"""SELECT b.id AS book_id, b.title, b.barcode,
                   COALESCE(SUM(ii.qty),0) AS qty,
                   COALESCE(SUM(ii.line_total),0) AS revenue
            FROM invoice_items ii
            JOIN invoices i ON i.id = ii.invoice_id
            JOIN books b ON b.id = ii.book_id
            WHERE (i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))
-             AND i.status = 'paid'
+             AND i.status IN {SETTLED_SQL}
            GROUP BY b.id ORDER BY revenue DESC""",
         (user_id, user_id),
     ).fetchall()
 
+    summary_data = dict(summary)
+    summary_data["outstanding"] = max(
+        0,
+        round(float(summary_data["revenue"] or 0) - float(summary_data["collected"] or 0), 2),
+    )
+    invoice_rows = []
+    for invoice in invoices:
+        data = dict(invoice)
+        data["balance_due"] = max(
+            0, round(float(data["total"] or 0) - float(data["amount_paid"] or 0), 2)
+        )
+        invoice_rows.append(data)
+
     return {
         "distributor": dict(row),
-        "summary": dict(summary),
-        "invoices": [dict(r) for r in invoices],
+        "summary": summary_data,
+        "invoices": invoice_rows,
         "books": [dict(r) for r in books],
     }
 

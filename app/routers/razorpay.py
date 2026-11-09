@@ -103,6 +103,15 @@ async def razorpay_webhook(request: Request, db=Depends(get_db)):
                 WHERE id = ? AND status = 'pending'""",
             (payment["id"], payment["id"], invoice["id"]),
         )
+        db.execute(
+            """INSERT INTO invoice_payments
+                   (invoice_id, amount, method, reference, received_by, note)
+               SELECT ?, ?, 'upi', ?, ?, 'Confirmed by Razorpay'
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM invoice_payments p WHERE p.invoice_id = ?
+                )""",
+            (invoice["id"], invoice["total"], payment["id"], invoice["cashier_id"], invoice["id"]),
+        )
         _record_system_audit(
             db,
             "RAZORPAY_PAYMENT_CONFIRMED",

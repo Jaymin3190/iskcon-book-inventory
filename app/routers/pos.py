@@ -25,8 +25,63 @@ from ..services.timezone import format_ist_date
 
 router = APIRouter(prefix="/api/pos", tags=["pos"])
 
-PAYMENT_MODES = ("cash", "upi", "razorpay")
+PAYMENT_MODES = ("cash", "upi", "card", "razorpay", "ledger")
+INVOICE_PAYMENT_METHODS = ("cash", "upi", "card")
+INVOICE_SETTLED_STATUSES = ("paid", "partial", "unpaid")
 logger = logging.getLogger(__name__)
+
+
+def invoice_status_for(total, amount_paid) -> str:
+    total = round(float(total or 0), 2)
+    amount_paid = round(float(amount_paid or 0), 2)
+    if total <= 0:
+        return "paid"
+    if amount_paid <= 0:
+        return "unpaid"
+    if amount_paid + 0.009 < total:
+        return "partial"
+    return "paid"
+
+
+def paid_total(db, invoice_id) -> float:
+    row = db.execute(
+        "SELECT COALESCE(SUM(amount),0) AS paid FROM invoice_payments WHERE invoice_id = ?",
+        (invoice_id,),
+    ).fetchone()
+    return round(float(row["paid"] or 0), 2)
+
+
+def invoice_payment_summary(db, invoice_id):
+    paid = paid_total(db, invoice_id)
+    cash = db.execute(
+        """SELECT COALESCE(SUM(amount),0) AS collected
+             FROM invoice_payments
+            WHERE invoice_id = ? AND method = 'cash'""",
+        (invoice_id,),
+    ).fetchone()["collected"]
+    remitted = db.execute(
+        """SELECT COALESCE(SUM(amount),0) AS remitted
+             FROM cash_submission_items
+            WHERE invoice_id = ?""",
+        (invoice_id,),
+    ).fetchone()["remitted"]
+    collected = round(float(cash or 0), 2)
+    remitted = round(float(remitted or 0), 2)
+    return {
+        "amount_paid": paid,
+        "cash_collected": collected,
+        "cash_remitted": remitted,
+        "cash_remittable": max(0, round(collected - remitted, 2)),
+    }
+
+
+def decorate_invoice(data):
+    total = round(float(data.get("total") or 0), 2)
+    paid = round(float(data.get("amount_paid") or 0), 2)
+    data["amount_paid"] = paid
+    data["balance_due"] = max(0, round(total - paid, 2))
+    return data
+
 
 
 def next_invoice_number(db, user) -> str:
@@ -53,8 +108,16 @@ class InvoiceIn(BaseModel):
     customer_phone: Optional[str] = None
     payment_mode: str = "cash"
     payment_ref: Optional[str] = None
+    amount_received: Optional[float] = None
     discount: float = 0
     items: list[InvoiceItemIn]
+
+
+class InvoicePaymentIn(BaseModel):
+    amount: float
+    method: str = "cash"
+    reference: Optional[str] = None
+    note: Optional[str] = None
 
 
 class InvoiceEditItemIn(BaseModel):
@@ -74,7 +137,9 @@ class InvoiceEditIn(BaseModel):
 @router.get("/invoices")
 def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     ids = invoice_location_ids(db, user)
-    sql = """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name
+    sql = """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name,
+                    COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                               WHERE p.invoice_id = i.id),0) AS amount_paid
              FROM invoices i
              JOIN locations l ON l.id = i.location_id
              LEFT JOIN users u ON u.id = i.cashier_id
@@ -84,7 +149,7 @@ def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", 
         sql += " AND (i.cashier_id = ? OR i.distributor_id = ?)"
         params.extend([user["id"], user["id"]])
     sql += " ORDER BY i.id DESC"
-    return [dict(r) for r in db.execute(sql, params).fetchall()]
+    return [decorate_invoice(dict(r)) for r in db.execute(sql, params).fetchall()]
 
 
 @router.get("/invoices/export")
@@ -97,6 +162,8 @@ def export_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin"
                     CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
                          ELSE i.payment_mode END AS payment_mode,
                     i.payment_ref, i.status, i.subtotal, i.discount, i.total,
+                    COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                               WHERE p.invoice_id = i.id),0) AS amount_paid,
                     b.title AS book_title, b.barcode,
                     ii.qty, ii.unit_price, ii.line_total
              FROM invoices i
@@ -110,7 +177,7 @@ def export_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin"
         sql += " AND (i.cashier_id = ? OR i.distributor_id = ?)"
         params.extend([user["id"], user["id"]])
     sql += " ORDER BY i.id DESC, ii.id"
-    return [dict(row) for row in db.execute(sql, params).fetchall()]
+    return [decorate_invoice(dict(row)) for row in db.execute(sql, params).fetchall()]
 
 
 @router.post("/invoices")
@@ -181,10 +248,23 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     if data.payment_mode == "razorpay" and total <= 0:
         raise HTTPException(400, "Razorpay payments must have a positive total")
 
+    amount_paid = total
+    status = "pending"
+    if data.payment_mode != "razorpay":
+        if data.amount_received is None:
+            amount_paid = 0.0 if data.payment_mode == "ledger" else total
+        else:
+            amount_paid = round(float(data.amount_received), 2)
+            if amount_paid < 0:
+                raise HTTPException(400, "Amount received cannot be negative")
+            if amount_paid > total + 0.009:
+                raise HTTPException(400, "Amount received cannot exceed the invoice total")
+            amount_paid = min(amount_paid, total)
+        status = invoice_status_for(total, amount_paid)
+
     qr_code = None
     try:
         num = next_invoice_number(db, user)
-        status = "pending" if data.payment_mode == "razorpay" else "paid"
         stored_payment_mode = "upi" if data.payment_mode == "razorpay" else data.payment_mode
         share_token = secrets.token_urlsafe(24)
         cur = db.execute(
@@ -214,6 +294,14 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
                     WHERE id = ?""",
                 (qr_code["id"], qr_code["image_url"], iid),
             )
+        elif amount_paid > 0:
+            db.execute(
+                """INSERT INTO invoice_payments
+                       (invoice_id, amount, method, reference, received_by, note)
+                   VALUES (?,?,?,?,?,?)""",
+                (iid, amount_paid, data.payment_mode, data.payment_ref, user["id"],
+                 "Initial payment at billing" if amount_paid < total else None),
+            )
         db.commit()
     except RazorpayError as error:
         db.rollback()
@@ -228,13 +316,16 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         raise
 
     payment_label = "razorpay" if data.payment_mode == "razorpay" else data.payment_mode
-    log_audit(db, user["id"], "INVOICE_CREATE", "invoices", iid, f"{num} total {total} {payment_label} {status}", user["username"])
+    log_audit(db, user["id"], "INVOICE_CREATE", "invoices", iid,
+              f"{num} total {total} received {amount_paid} {payment_label} {status}", user["username"])
     result = {
         "invoice_id": iid,
         "invoice_number": num,
         "total": total,
         "subtotal": subtotal,
         "discount": discount,
+        "amount_paid": amount_paid,
+        "balance_due": max(0, round(total - amount_paid, 2)),
         "status": status,
         "payment_mode": payment_label,
         "share_token": share_token,
@@ -251,7 +342,9 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
 def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
         """SELECT i.*, l.code AS location_code, l.name AS location_name,
-                  u.name AS cashier_name, d.name AS distributor_name
+                  u.name AS cashier_name, d.name AS distributor_name,
+                  COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                             WHERE p.invoice_id = i.id),0) AS amount_paid
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
@@ -271,10 +364,23 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
            WHERE ii.invoice_id = ?""",
         (invoice_id,),
     ).fetchall()
-    data = dict(inv)
+    payments = db.execute(
+        """SELECT p.*, u.name AS received_by_name
+             FROM invoice_payments p
+             LEFT JOIN users u ON u.id = p.received_by
+            WHERE p.invoice_id = ?
+            ORDER BY p.id""",
+        (invoice_id,),
+    ).fetchall()
+    data = decorate_invoice(dict(inv))
     data["items"] = [dict(r) for r in items]
+    data["payments"] = [dict(r) for r in payments]
+    data.update(invoice_payment_summary(db, invoice_id))
     data["handed_over"] = bool(
-        db.execute("SELECT 1 FROM cash_submission_items WHERE invoice_id = ?", (invoice_id,)).fetchone()
+        db.execute(
+            "SELECT 1 FROM cash_submission_items WHERE invoice_id = ? LIMIT 1",
+            (invoice_id,),
+        ).fetchone()
     )
     return data
 
@@ -284,22 +390,29 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
     inv = db.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    if inv["status"] != "paid":
-        raise HTTPException(409, "Only paid invoices can be edited")
+    if inv["status"] in ("pending", "failed"):
+        raise HTTPException(409, "Pending or failed invoices cannot be edited")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
         raise HTTPException(403, "Distributors can only edit their own bills")
 
     handed_over = db.execute(
-        "SELECT 1 FROM cash_submission_items WHERE invoice_id = ?", (invoice_id,)
+        "SELECT 1 FROM cash_submission_items WHERE invoice_id = ? LIMIT 1", (invoice_id,)
     ).fetchone()
+    recorded_paid = paid_total(db, invoice_id)
+    partially_paid = 0 < recorded_paid < round(float(inv["total"] or 0), 2)
     razorpay_invoice = inv["razorpay_qr_code_id"] is not None
     amount_change = data.items is not None or data.discount is not None or data.payment_mode is not None
     if handed_over and amount_change:
         raise HTTPException(
             409,
             "This invoice has already been handed over to the temple. Void that payment-in before editing its items or amount.",
+        )
+    if partially_paid and amount_change:
+        raise HTTPException(
+            409,
+            "Payments have already been recorded on this invoice. Void those payments before editing its items or amount.",
         )
     if razorpay_invoice and amount_change:
         raise HTTPException(
@@ -391,14 +504,31 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
     else:
         discount = min(float(inv["discount"] or 0), subtotal)
     total = round(subtotal - discount, 2)
+    status = inv["status"]
+    fully_paid_before = recorded_paid > 0 and not partially_paid
+    if not razorpay_invoice:
+        # A bill that was already settled follows its corrected total, so the
+        # single payment is adjusted rather than leaving a phantom balance.
+        status = "paid" if fully_paid_before else invoice_status_for(total, recorded_paid)
 
     db.execute(
         """UPDATE invoices
               SET customer_name = ?, customer_phone = ?, payment_mode = ?,
-                  payment_ref = ?, subtotal = ?, discount = ?, total = ?
+                  payment_ref = ?, subtotal = ?, discount = ?, total = ?, status = ?
             WHERE id = ?""",
-        (customer_name, customer_phone, payment_mode, payment_ref, subtotal, discount, total, invoice_id),
+        (customer_name, customer_phone, payment_mode, payment_ref, subtotal, discount, total,
+         status, invoice_id),
     )
+    if fully_paid_before and not razorpay_invoice:
+        db.execute("DELETE FROM invoice_payments WHERE invoice_id = ?", (invoice_id,))
+        if total > 0:
+            db.execute(
+                """INSERT INTO invoice_payments
+                       (invoice_id, amount, method, reference, received_by, note)
+                   VALUES (?,?,?,?,?,?)""",
+                (invoice_id, total, payment_mode, payment_ref, user["id"],
+                 "Adjusted after invoice edit"),
+            )
     if new_lines is not None:
         db.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
         for book_id, qty, unit_price, line_total in new_lines:
@@ -414,7 +544,9 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
 
     updated = db.execute(
         """SELECT i.*, l.code AS location_code, l.name AS location_name,
-                  u.name AS cashier_name, d.name AS distributor_name
+                  u.name AS cashier_name, d.name AS distributor_name,
+                  COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                             WHERE p.invoice_id = i.id),0) AS amount_paid
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
@@ -428,13 +560,87 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
            WHERE ii.invoice_id = ?""",
         (invoice_id,),
     ).fetchall()
-    result = dict(updated)
+    result = decorate_invoice(dict(updated))
     result["items"] = [dict(row) for row in items]
     return result
 
 
+@router.post("/invoices/{invoice_id}/payments")
+def receive_invoice_payment(
+    invoice_id: int,
+    data: InvoicePaymentIn,
+    db=Depends(get_db),
+    user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple")),
+):
+    """Record money collected later against a partial or credit invoice."""
+    inv = db.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv["location_id"] not in invoice_location_ids(db, user):
+        raise HTTPException(403, "Forbidden")
+    if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
+        raise HTTPException(403, "Distributors can only collect payments for their own bills")
+    if inv["razorpay_qr_code_id"] or inv["status"] in ("pending", "failed"):
+        raise HTTPException(409, "Razorpay invoices are settled only by Razorpay and cannot take a manual payment")
+    if data.method not in INVOICE_PAYMENT_METHODS:
+        raise HTTPException(400, f"Invalid payment method. Valid: {', '.join(INVOICE_PAYMENT_METHODS)}")
+
+    total = round(float(inv["total"] or 0), 2)
+    already_paid = paid_total(db, invoice_id)
+    balance = max(0, round(total - already_paid, 2))
+    if balance <= 0:
+        raise HTTPException(409, "This invoice is already fully paid")
+    amount = round(float(data.amount), 2)
+    if amount <= 0:
+        raise HTTPException(400, "Payment amount must be positive")
+    if amount > balance + 0.009:
+        raise HTTPException(400, f"Payment exceeds the outstanding balance of {balance:.2f}")
+
+    try:
+        cur = db.execute(
+            """INSERT INTO invoice_payments
+                   (invoice_id, amount, method, reference, received_by, note)
+               VALUES (?,?,?,?,?,?)""",
+            (invoice_id, amount, data.method, (data.reference or "").strip() or None,
+             user["id"], (data.note or "").strip() or None),
+        )
+        payment_id = cur.lastrowid
+        new_paid = round(already_paid + amount, 2)
+        status = invoice_status_for(total, new_paid)
+        db.execute("UPDATE invoices SET status = ? WHERE id = ?", (status, invoice_id))
+        db.commit()
+    except sqlite3.Error:
+        db.rollback()
+        raise
+
+    log_audit(
+        db, user["id"], "INVOICE_PAYMENT", "invoices", invoice_id,
+        f"{inv['invoice_number']} received {amount:.2f} {data.method}; balance "
+        f"{max(0, round(total - new_paid, 2)):.2f}",
+        user["username"],
+    )
+    return {
+        "ok": True,
+        "payment_id": payment_id,
+        "invoice_id": invoice_id,
+        "invoice_number": inv["invoice_number"],
+        "amount": amount,
+        "amount_paid": new_paid,
+        "balance_due": max(0, round(total - new_paid, 2)),
+        "status": status,
+    }
+
+
 def invoice_date_ist(value):
     return format_ist_date(value)
+
+
+def _value(row, key, default=0):
+    try:
+        value = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if value is None else value
 
 
 def invoice_html(inv, items, pdf_url=None):
@@ -489,6 +695,15 @@ def invoice_html(inv, items, pdf_url=None):
     payment_ref = escape(str(inv["payment_ref"] or ""))
     payment_label = "razorpay" if inv["razorpay_qr_code_id"] else inv["payment_mode"]
     payment = escape(str(payment_label or "").upper())
+    total_cents = round(float(inv["total"]) * 100)
+    paid_cents = round(float(_value(inv, "amount_paid", float(inv["total"]))) * 100)
+    balance_cents = max(0, total_cents - paid_cents)
+    balance_row = (
+        f"<p><strong>Amount paid:</strong> {money(paid_cents)} &nbsp; "
+        f"<strong>Balance due:</strong> {money(balance_cents)}</p>"
+        if balance_cents > 0 else
+        f"<p><strong>Amount paid:</strong> {money(paid_cents)}</p>"
+    )
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Invoice {inv['invoice_number']}</title>
     <style>
       * {{ box-sizing: border-box; }}
@@ -556,6 +771,9 @@ def invoice_html(inv, items, pdf_url=None):
       </tbody>
     </table>
     <p style="margin-top:12px"><strong>Payment:</strong> {payment}{f" ({payment_ref})" if payment_ref else ""}</p>
+    <div class="payment-summary">
+      {balance_row}
+    </div>
     </body></html>"""
 
 
@@ -563,7 +781,9 @@ def invoice_html(inv, items, pdf_url=None):
 def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
         """SELECT i.*, l.code AS location_code, l.name AS location_name,
-                  u.name AS cashier_name, d.name AS distributor_name
+                  u.name AS cashier_name, d.name AS distributor_name,
+                  COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                             WHERE p.invoice_id = i.id),0) AS amount_paid
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
@@ -573,8 +793,8 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
     ).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    if inv["status"] != "paid":
-        raise HTTPException(409, "Only paid invoices can be printed as receipts")
+    if inv["status"] not in INVOICE_SETTLED_STATUSES:
+        raise HTTPException(409, "Only billed invoices can be printed as receipts")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
@@ -592,7 +812,9 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
 def download_invoice_pdf(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
         """SELECT i.*, l.code AS location_code, l.name AS location_name,
-                  u.name AS cashier_name, d.name AS distributor_name
+                  u.name AS cashier_name, d.name AS distributor_name,
+                  COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                             WHERE p.invoice_id = i.id),0) AS amount_paid
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
@@ -602,8 +824,8 @@ def download_invoice_pdf(invoice_id: int, db=Depends(get_db), user=Depends(requi
     ).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    if inv["status"] != "paid":
-        raise HTTPException(409, "Only paid invoices can be downloaded as receipts")
+    if inv["status"] not in INVOICE_SETTLED_STATUSES:
+        raise HTTPException(409, "Only billed invoices can be downloaded as receipts")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
     if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
@@ -643,7 +865,7 @@ def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_rol
         )
     if inv["status"] == "pending":
         raise HTTPException(409, "This invoice has a pending Razorpay payment and cannot be deleted")
-    stock_restored = inv["status"] == "paid"
+    stock_restored = inv["status"] in INVOICE_SETTLED_STATUSES
     items = db.execute(
         "SELECT * FROM invoice_items WHERE invoice_id = ?",
         (invoice_id,),
@@ -651,6 +873,7 @@ def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_rol
     if stock_restored:
         for it in items:
             move_stock(db, it["book_id"], inv["location_id"], it["qty"], "SALE_REVERSED", "invoices", invoice_id, user["id"], "invoice deleted", commit=False)
+    db.execute("DELETE FROM invoice_payments WHERE invoice_id = ?", (invoice_id,))
     db.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
     db.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
     db.commit()

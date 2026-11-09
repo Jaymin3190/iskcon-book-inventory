@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from ..database import get_db
 from ..services.invoice_pdf import build_invoice_pdf
-from .pos import invoice_html
+from .pos import INVOICE_SETTLED_STATUSES, invoice_html
 
 router = APIRouter(tags=["public"])
 
@@ -22,7 +22,9 @@ def _shared_invoice(token: str, db):
         raise HTTPException(404, "Invoice not found")
     inv = db.execute(
         """SELECT i.*, l.code AS location_code, l.name AS location_name,
-                  u.name AS cashier_name, d.name AS distributor_name
+                  u.name AS cashier_name, d.name AS distributor_name,
+                  COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                             WHERE p.invoice_id = i.id),0) AS amount_paid
            FROM invoices i
            JOIN locations l ON l.id = i.location_id
            LEFT JOIN users u ON u.id = i.cashier_id
@@ -30,7 +32,7 @@ def _shared_invoice(token: str, db):
            WHERE i.share_token = ?""",
         (token,),
     ).fetchone()
-    if not inv or inv["status"] != "paid":
+    if not inv or inv["status"] not in INVOICE_SETTLED_STATUSES:
         raise HTTPException(404, "Invoice not found")
     items = db.execute(
         """SELECT ii.*, b.title, b.barcode

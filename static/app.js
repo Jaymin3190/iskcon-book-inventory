@@ -348,7 +348,7 @@ async function dashboard() {
       <h2>Zone overview</h2>
       <p class="hint">Stock and sales for every zone. Select a zone to see its distributors and their bills.</p>
       <table class="zone-table">
-        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Cash</th><th>UPI</th><th>Razorpay</th></tr>
+        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Collected</th><th>Outstanding</th><th>Cash</th><th>UPI</th><th>Razorpay</th></tr>
         ${zones.map(z => `<tr class="zone-row" onclick="zoneDetails(${z.id})">
           <td><strong>${esc(z.name)}</strong><span class="cart-book-barcode">${esc(z.code)}</span></td>
           <td>${z.stock_units}</td>
@@ -356,10 +356,12 @@ async function dashboard() {
           <td>${z.distributor_count}</td>
           <td>${z.invoice_count}</td>
           <td>&#8377;${Number(z.revenue || 0).toFixed(2)}</td>
+          <td>&#8377;${Number(z.collected || 0).toFixed(2)}</td>
+          <td>${Number(z.outstanding || 0) > 0 ? `<strong>&#8377;${Number(z.outstanding).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
           <td>&#8377;${Number(z.cash_total || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.upi_total || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.razorpay_total || 0).toFixed(2)}</td>
-        </tr>`).join('') || '<tr><td colspan="9" class="hint">No zones found.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="11" class="hint">No zones found.</td></tr>'}
       </table>
     </div>` : '';
   document.getElementById('content').innerHTML = `
@@ -387,8 +389,8 @@ async function dashboard() {
       </table>
     </div>
     <div class="card"><h2>Sales by location</h2><p class="hint">Select a location to see sales by book.</p>
-      <table><tr><th>Location</th><th>Invoices</th><th>Subtotal</th><th>Discount</th><th>Revenue</th></tr>
-        ${sales.map(s => `<tr class="summary-clickable-row" onclick="showLocationSales(${Number(s.location_id)})" title="Click to view sales by book"><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.subtotal.toFixed(2)}</td><td>&#8377;${s.discount.toFixed(2)}</td><td>&#8377;${s.revenue.toFixed(2)}</td></tr>`).join('')}
+      <table><tr><th>Location</th><th>Invoices</th><th>Subtotal</th><th>Discount</th><th>Revenue</th><th>Collected</th><th>Outstanding</th></tr>
+        ${sales.map(s => `<tr class="summary-clickable-row" onclick="showLocationSales(${Number(s.location_id)})" title="Click to view sales by book"><td>${esc(s.location_name)}</td><td>${s.invoice_count}</td><td>&#8377;${s.subtotal.toFixed(2)}</td><td>&#8377;${s.discount.toFixed(2)}</td><td>&#8377;${s.revenue.toFixed(2)}</td><td>&#8377;${Number(s.collected || 0).toFixed(2)}</td><td>${Number(s.outstanding || 0) > 0 ? `<strong>&#8377;${Number(s.outstanding).toFixed(2)}</strong>` : '&#8377;0.00'}</td></tr>`).join('')}
       </table>
     </div>
     <div class="card"><h2>Transfers by status</h2><p class="hint">Select a status to see its transfers and books.</p>
@@ -481,6 +483,8 @@ async function showLocationSales(locationId) {
         ${miniStat('Subtotal', '&#8377;' + Number(summary?.subtotal || 0).toFixed(2))}
         ${miniStat('Discount', '&#8377;' + Number(summary?.discount || 0).toFixed(2))}
         ${miniStat('Revenue', '&#8377;' + Number(summary?.revenue || 0).toFixed(2))}
+        ${miniStat('Collected', '&#8377;' + Number(summary?.collected || 0).toFixed(2))}
+        ${miniStat('Outstanding', '&#8377;' + Number(summary?.outstanding || 0).toFixed(2))}
       </div>
       <h4>Sales by book (${books.length} book types)</h4>
       <div class="table-scroll"><table><tr><th>Book</th><th>Barcode</th><th>Units sold</th><th>Revenue</th></tr>${rows}</table></div>`);
@@ -572,6 +576,7 @@ async function exportDashboardData(type) {
         ['book_title', 'Book'], ['barcode', 'Barcode'], ['qty', 'Quantity'],
         ['unit_price', 'Unit price'], ['line_total', 'Line total'],
         ['subtotal', 'Invoice subtotal'], ['discount', 'Discount'], ['total', 'Invoice total'],
+        ['amount_paid', 'Amount paid'], ['balance_due', 'Balance due'],
       ],
     },
   };
@@ -614,12 +619,16 @@ async function zoneDetails(zoneId) {
       <td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td>
       <td>${i.books_qty}</td>
       <td>&#8377;${Number(i.total).toFixed(2)}</td>
-      <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'zone', ${zoneId})">Delete</button>` : ''}</td>
-    </tr>`).join('') || '<tr><td colspan="9" class="hint">No invoices in this zone yet.</td></tr>';
+      <td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td>
+      <td>${Number(i.balance_due || 0) > 0 ? `<strong>&#8377;${Number(i.balance_due).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
+      <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'zone', ${zoneId})">Delete</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="11" class="hint">No invoices in this zone yet.</td></tr>';
   openModal(`<h3>${esc(z.name || 'Zone')} &mdash; details</h3>
     <p class="hint">${esc(z.code || '')} &middot; ${z.stock_units ?? 0} stock units &middot; ${z.distributor_count ?? distributors.length} active distributor(s)</p>
     <div class="mini-stats">
       ${miniStat('Zone revenue', '&#8377;' + Number(z.revenue || 0).toFixed(2))}
+      ${miniStat('Collected', '&#8377;' + Number(z.collected || 0).toFixed(2))}
+      ${miniStat('Outstanding', '&#8377;' + Number(z.outstanding || 0).toFixed(2))}
       ${miniStat('Cash', '&#8377;' + Number(z.cash_total || 0).toFixed(2))}
       ${miniStat('UPI', '&#8377;' + Number(z.upi_total || 0).toFixed(2))}
       ${miniStat('Razorpay', '&#8377;' + Number(z.razorpay_total || 0).toFixed(2))}
@@ -629,7 +638,7 @@ async function zoneDetails(zoneId) {
     </div>
     <h4>Distributors</h4>
     <table>
-      <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th>Revenue</th><th>Last sale</th><th></th></tr>
+      <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th>Credit</th><th>Revenue</th><th>Collected</th><th>Outstanding</th><th>Last sale</th><th></th></tr>
       ${distributors.map(d => `<tr class="zone-row" onclick="distributorDetails(${d.id}, ${zoneId})">
         <td><strong>${esc(d.name)}</strong><span class="cart-book-barcode">${esc(d.username)}</span></td>
         <td>${d.invoice_count}</td>
@@ -637,14 +646,17 @@ async function zoneDetails(zoneId) {
         <td>&#8377;${Number(d.cash_total || 0).toFixed(2)}</td>
         <td>&#8377;${Number(d.upi_total || 0).toFixed(2)}</td>
         <td>&#8377;${Number(d.razorpay_total || 0).toFixed(2)}</td>
+        <td>&#8377;${Number(d.ledger_total || 0).toFixed(2)}</td>
         <td>&#8377;${Number(d.revenue || 0).toFixed(2)}</td>
+        <td>&#8377;${Number(d.collected || 0).toFixed(2)}</td>
+        <td>${Number(d.outstanding || 0) > 0 ? `<strong>&#8377;${Number(d.outstanding).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
         <td>${d.last_sale ? esc(formatAuditTime(d.last_sale)) : '&mdash;'}</td>
         <td><button class="action" onclick="event.stopPropagation(); distributorDetails(${d.id}, ${zoneId})">Details</button></td>
-      </tr>`).join('') || '<tr><td colspan="8" class="hint">No distributors assigned to this zone.</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="12" class="hint">No distributors assigned to this zone.</td></tr>'}
     </table>
     <h4>Zone invoices (${invoices.length})</h4>
     <table>
-      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Customer</th><th>Payment</th><th>Status</th><th>Qty</th><th>Total</th><th></th></tr>
+      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Customer</th><th>Payment</th><th>Status</th><th>Qty</th><th>Total</th><th>Paid</th><th>Balance</th><th></th></tr>
       ${invoiceRows}
     </table>
     <div class="toolbar" style="margin:16px 0 0"><button class="action" onclick="closeModal()">Close</button></div>`);
@@ -666,25 +678,31 @@ async function distributorDetails(userId, zoneId) {
       <td>${esc(formatAuditTime(i.created_at))}</td>
       <td>${esc(i.customer_name || '—')}<span class="cart-book-barcode">${esc(i.customer_phone || '')}</span></td>
       <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
+      <td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td>
       <td>${i.books_qty}</td>
       <td>&#8377;${Number(i.total).toFixed(2)}</td>
-      <td><button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'dist', ${userId}, ${zoneId})">Delete</button>` : ''}</td>
-    </tr>`).join('') || '<tr><td colspan="7" class="hint">No invoices yet.</td></tr>';
+      <td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td>
+      <td>${Number(i.balance_due || 0) > 0 ? `<strong>&#8377;${Number(i.balance_due).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
+      <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'dist', ${userId}, ${zoneId})">Delete</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="10" class="hint">No invoices yet.</td></tr>';
   openModal(`<h3>${esc(d.name)}</h3>
     <p class="hint">@${esc(d.username)} &middot; ${esc(d.zone_name || '—')} &middot; ${d.is_active ? 'Active' : 'Inactive'} &middot; Joined ${esc(formatAuditTime(d.created_at))}</p>
     <div class="mini-stats">
       ${miniStat('Total sales', '&#8377;' + Number(s.revenue || 0).toFixed(2))}
+      ${miniStat('Collected', '&#8377;' + Number(s.collected || 0).toFixed(2))}
+      ${miniStat('Outstanding', '&#8377;' + Number(s.outstanding || 0).toFixed(2))}
       ${miniStat('Bills', s.invoice_count)}
       ${miniStat('Cash', '&#8377;' + Number(s.cash_total || 0).toFixed(2))}
       ${miniStat('UPI', '&#8377;' + Number(s.upi_total || 0).toFixed(2))}
       ${miniStat('Razorpay', '&#8377;' + Number(s.razorpay_total || 0).toFixed(2))}
+      ${miniStat('Credit', '&#8377;' + Number(s.ledger_total || 0).toFixed(2))}
       ${miniStat('Books sold', s.books_sold)}
       ${miniStat('Discount given', '&#8377;' + Number(s.discount || 0).toFixed(2))}
     </div>
     <h4>Books sold (${data.books.length})</h4>
     <table><tr><th>Book</th><th>Barcode</th><th>Qty</th><th>Revenue</th></tr>${bookRows}</table>
     <h4>Invoices (${data.invoices.length})</h4>
-    <table><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Payment</th><th>Qty</th><th>Total</th><th></th></tr>${invoiceRows}</table>
+    <table><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Payment</th><th>Status</th><th>Qty</th><th>Total</th><th>Paid</th><th>Balance</th><th></th></tr>${invoiceRows}</table>
     <div class="toolbar" style="margin:16px 0 0">
       <button class="action" onclick="zoneDetails(${zoneId})">Back to distributors</button>
       <button class="action" onclick="closeModal()">Close</button>
@@ -1407,12 +1425,16 @@ async function pos() {
           <select id="payMode" onchange="toggleUpiQr()">
             <option value="cash">Cash</option>
             <option value="upi">UPI</option>
+            <option value="card">Card</option>
+            <option value="ledger">Credit / ledger</option>
             <option value="razorpay">Razorpay</option>
           </select>
         </div>
+        <div class="form-row"><label>Amount received (&#8377;)</label><input id="payAmountReceived" type="number" min="0" step="0.01" placeholder="Full amount" oninput="renderCart()"></div>
         <div class="form-row"><label>Payment ref (optional)</label><input id="payRef"></div>
         <div class="form-row"><label>Discount (&#8377;)</label><input id="discount" type="number" min="0" value="" oninput="renderCart()"></div>
       </div>
+      <p id="payAmountHint" class="hint"></p>
       <div id="upiQrPanel" class="upi-qr-panel" hidden>
         <p>Scan this UPI QR code to pay. Save the invoice after payment.</p>
         <img src="/upi-qr.jpeg" alt="ISKCON Jamnagar Books and Gifts UPI payment QR code">
@@ -1469,8 +1491,21 @@ function renderPosDistributorOptions() {
 function toggleUpiQr() {
   const panel = document.getElementById('upiQrPanel');
   const razorpayInfo = document.getElementById('razorpayInfo');
-  if (panel) panel.hidden = document.getElementById('payMode').value !== 'upi';
-  if (razorpayInfo) razorpayInfo.hidden = document.getElementById('payMode').value !== 'razorpay';
+  const mode = document.getElementById('payMode').value;
+  if (panel) panel.hidden = mode !== 'upi';
+  if (razorpayInfo) razorpayInfo.hidden = mode !== 'razorpay';
+  const amountInput = document.getElementById('payAmountReceived');
+  if (amountInput) {
+    if (mode === 'razorpay') {
+      amountInput.value = '';
+      amountInput.disabled = true;
+    } else {
+      amountInput.disabled = false;
+      if (mode === 'ledger' && amountInput.value === '') amountInput.value = '0';
+      if (mode !== 'ledger' && Number(amountInput.value) === 0) amountInput.value = '';
+    }
+  }
+  renderCart();
 }
 
 function addToCart(b) {
@@ -1527,6 +1562,22 @@ function renderCart() {
     </tr>`).join('');
   document.getElementById('cartTotal').textContent = `&#8377;${total.toFixed(2)}`;
   document.getElementById('cartTotal').innerHTML = `&#8377;${total.toFixed(2)}`;
+  const hint = document.getElementById('payAmountHint');
+  if (hint) {
+    const raw = document.getElementById('payAmountReceived')?.value;
+    const mode = document.getElementById('payMode')?.value;
+    if (mode === 'razorpay') {
+      hint.textContent = 'Razorpay collects the full amount through the QR code.';
+    } else if (raw === '' || raw === undefined || raw === null) {
+      hint.textContent = 'Leave blank to collect the full amount now.';
+    } else {
+      const received = Math.max(0, Number(raw) || 0);
+      const due = Math.max(0, Math.round((total - received) * 100) / 100);
+      hint.textContent = due > 0
+        ? `Collecting ₹${received.toFixed(2)} now; ₹${due.toFixed(2)} remains due.`
+        : 'Collecting the full amount.';
+    }
+  }
 }
 
 function whatsappPhoneNumber(value) {
@@ -1922,8 +1973,18 @@ async function checkout() {
   const custPhone = document.getElementById('custPhone').value.trim();
   const payMode = document.getElementById('payMode').value;
   const payRef = document.getElementById('payRef').value.trim();
+  const amountRaw = document.getElementById('payAmountReceived').value;
   if (!custName) return toast('Customer name is required', 'error');
   if (!custPhone) return toast('Phone number is required', 'error');
+  let amountReceived = null;
+  if (payMode === 'ledger') {
+    amountReceived = amountRaw === '' ? 0 : Number(amountRaw);
+  } else if (amountRaw !== '') {
+    amountReceived = Number(amountRaw);
+  }
+  if (amountReceived !== null && (!Number.isFinite(amountReceived) || amountReceived < 0)) {
+    return toast('Amount received must be zero or more', 'error');
+  }
   const purchasedItems = state.cart.map(i => ({ title: i.title, qty: i.qty }));
   let res;
   try {
@@ -1932,6 +1993,7 @@ async function checkout() {
       distributor_id: Number(document.getElementById('posDistributor')?.value) || null,
       customer_name: custName, customer_phone: custPhone,
       payment_mode: payMode, payment_ref: payRef,
+      amount_received: amountReceived,
       discount: Number(document.getElementById('discount').value) || 0,
       items: state.cart.map(i => ({ barcode: i.barcode, qty: i.qty })),
     }});
@@ -1960,13 +2022,17 @@ async function checkout() {
     toast('Invoice saved; waiting for Razorpay payment confirmation', 'success');
     return;
   }
-  showSavedInvoice(res, `Payment: ${payMode.toUpperCase()}${payRef ? ` (${payRef})` : ''}`);
+  showSavedInvoice(res, `Payment: ${res.payment_mode.toUpperCase()}${payRef ? ` (${payRef})` : ''}`);
   toast('Invoice saved: ' + res.invoice_number, 'success');
 }
 
 function showSavedInvoice(invoice, detail) {
+  const due = Number(invoice.balance_due || 0);
   openModal(`<h3>Invoice saved</h3>
     <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
+    ${due > 0
+      ? `<p class="hint"><strong>Balance due:</strong> &#8377;${due.toFixed(2)}. Record it later from Invoice history &rarr; Receive payment.</p>`
+      : ''}
     <p class="hint">${esc(detail)}. Share opens the customer's WhatsApp chat with their invoice and a secure link to view or download the PDF. Save downloads the PDF again.</p>
     <div class="toolbar">
       <button class="primary" onclick="shareSavedInvoice(${invoice.invoice_id})">Share</button>
@@ -1979,7 +2045,7 @@ function showSavedInvoice(invoice, detail) {
 
 function finishSavedInvoice() {
   closeModal();
-  const fields = ['custName', 'custPhone', 'payRef', 'discount'];
+  const fields = ['custName', 'custPhone', 'payRef', 'discount', 'payAmountReceived'];
   fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   state.cart = [];
   state.lastInvoice = null;
@@ -2220,7 +2286,10 @@ async function checkInvoicePayment(invoiceId) {
 }
 
 function canEditInvoice(inv) {
-  if (inv.status !== 'paid') return false;
+  if (!['paid', 'partial', 'unpaid'].includes(inv.status)) return false;
+  // Once money has been collected against a bill, its amount and items are
+  // locked until those payments are voided.
+  if (Number(inv.amount_paid || 0) > 0 && Number(inv.balance_due || 0) > 0) return false;
   if (state.user.role === 'super_admin') return true;
   if (state.user.role === 'distributor') {
     return Number(inv.cashier_id) === state.user.id || Number(inv.distributor_id) === state.user.id;
@@ -2228,19 +2297,25 @@ function canEditInvoice(inv) {
   return false;
 }
 
+function canReceiveInvoicePayment(inv) {
+  if (!['paid', 'partial', 'unpaid'].includes(inv.status)) return false;
+  if (inv.razorpay_qr_code_id) return false;
+  return Number(inv.balance_due || 0) > 0;
+}
+
 async function invoiceList() {
   const rows = await api('/api/pos/invoices');
   const canDeleteAny = hasAnyRole('super_admin', 'zone_admin');
   openModal(`<h3>Invoice history</h3>
     <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only. Distributors see bills credited to them.</p>
-    <table>
-      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Actions</th></tr>
+    <div class="table-scroll"><table>
+      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Paid</th><th>Balance</th><th>Actions</th></tr>
       ${rows.map(i => `<tr class="clickable-row" onclick="rowOpen(event, 'invoiceDetail', ${i.id})">
         <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
-        <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td>
-        <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${i.status === 'paid' && canEditInvoice(i) ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="9" class="hint">No invoices yet.</td></tr>'}
-    </table>`);
+        <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td><td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td><td>${Number(i.balance_due || 0) > 0 ? `<strong>&#8377;${Number(i.balance_due).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
+        <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${canEditInvoice(i) ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${canReceiveInvoicePayment(i) ? `<button class="action" onclick="invoiceReceivePayment(${i.id})">Receive payment</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="event.stopPropagation(); invoiceDelete(${i.id})">Delete</button>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="11" class="hint">No invoices yet.</td></tr>'}
+    </table></div>`);
 }
 
 async function invoiceDetail(invoiceId) {
@@ -2248,10 +2323,18 @@ async function invoiceDetail(invoiceId) {
   try { inv = await api('/api/pos/invoices/' + invoiceId); }
   catch (e) { toast(e.message, 'error'); return; }
   invoiceShareCache[inv.id] = invoiceShareMeta(inv);
-  const paid = inv.status === 'paid';
+  const settled = ['paid', 'partial', 'unpaid'].includes(inv.status);
   // Preload the PDF so Share can open the native share sheet immediately from
   // the click; mobile browsers require that user activation.
-  if (paid) fetchInvoicePdf(inv.id).catch(() => {});
+  if (settled) fetchInvoicePdf(inv.id).catch(() => {});
+  const payments = inv.payments || [];
+  const paymentRows = payments.map(p => `<tr>
+      <td>${esc(formatAuditTime(p.received_at))}</td>
+      <td>${esc(String(p.method || '').toUpperCase())}${p.reference ? ' · ' + esc(p.reference) : ''}</td>
+      <td>${esc(p.received_by_name || '—')}</td>
+      <td>${esc(p.note || '—')}</td>
+      <td>&#8377;${Number(p.amount).toFixed(2)}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="hint">No payments recorded yet.</td></tr>';
   openModal(`<h3>Invoice ${esc(inv.invoice_number)}</h3>
     <div class="table-scroll"><table>
       <tr><th>Date</th><td>${esc(formatAuditTime(inv.created_at))}</td></tr>
@@ -2267,14 +2350,66 @@ async function invoiceDetail(invoiceId) {
       <tr><th>Title</th><th>Barcode</th><th>Qty</th><th>Price</th><th>Total</th></tr>
       ${inv.items.map(i => `<tr><td>${esc(i.title)}</td><td>${esc(i.barcode)}</td><td>${i.qty}</td><td>&#8377;${Number(i.unit_price).toFixed(2)}</td><td>&#8377;${Number(i.line_total).toFixed(2)}</td></tr>`).join('')}
     </table></div>
-    <p><strong>Total:</strong> &#8377;${Number(inv.total).toFixed(2)}</p>
+    <p><strong>Total:</strong> &#8377;${Number(inv.total).toFixed(2)}
+      &middot; <strong>Paid:</strong> &#8377;${Number(inv.amount_paid || 0).toFixed(2)}
+      &middot; <strong>Balance:</strong> &#8377;${Number(inv.balance_due || 0).toFixed(2)}</p>
+    <h4>Payments</h4>
+    <div class="table-scroll"><table>
+      <tr><th>When</th><th>Method</th><th>Received by</th><th>Note</th><th>Amount</th></tr>
+      ${paymentRows}
+    </table></div>
     <div class="toolbar" style="margin-top:14px">
-      ${paid ? `<button class="action" onclick="downloadInvoicePdf(${inv.id})">PDF</button>` : ''}
-      ${paid ? `<button class="action" onclick="shareInvoice(${inv.id})">Share</button>` : ''}
-      ${paid && canEditInvoice(inv) ? `<button class="action" onclick="invoiceEdit(${inv.id})">Edit</button>` : ''}
+      ${settled ? `<button class="action" onclick="downloadInvoicePdf(${inv.id})">PDF</button>` : ''}
+      ${settled ? `<button class="action" onclick="shareInvoice(${inv.id})">Share</button>` : ''}
+      ${canEditInvoice(inv) ? `<button class="action" onclick="invoiceEdit(${inv.id})">Edit</button>` : ''}
+      ${canReceiveInvoicePayment(inv) ? `<button class="primary" onclick="invoiceReceivePayment(${inv.id})">Receive payment</button>` : ''}
       ${inv.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${inv.id})">Check payment</button>` : ''}
       <button class="action" onclick="invoiceList()">Back</button>
     </div>`);
+}
+
+function invoiceReceivePayment(invoiceId) {
+  openModal(`<h3>Receive payment</h3>
+    <p class="hint">Record money collected against this bill. Leave the method as cash if the zone team collected it; it will then appear in Payment in for handover.</p>
+    <div class="form-grid">
+      <div class="form-row"><label>Amount (&#8377;) *</label><input id="recvAmount" type="number" min="0.01" step="0.01"></div>
+      <div class="form-row"><label>Method</label>
+        <select id="recvMethod">
+          <option value="cash">Cash</option>
+          <option value="upi">UPI</option>
+          <option value="card">Card</option>
+        </select>
+      </div>
+      <div class="form-row"><label>Reference (optional)</label><input id="recvRef"></div>
+      <div class="form-row"><label>Note (optional)</label><input id="recvNote"></div>
+    </div>
+    <p id="recvError" class="error"></p>
+    <div class="toolbar">
+      <button class="primary" onclick="invoiceReceivePaymentSave(${invoiceId})">Save payment</button>
+      <button class="action" onclick="invoiceDetail(${invoiceId})">Cancel</button>
+    </div>`);
+  document.getElementById('recvAmount').focus();
+}
+
+async function invoiceReceivePaymentSave(invoiceId) {
+  const amount = Number(document.getElementById('recvAmount').value);
+  const errorEl = document.getElementById('recvError');
+  if (!Number.isFinite(amount) || amount <= 0) {
+    if (errorEl) errorEl.textContent = 'Enter a payment amount greater than zero';
+    return;
+  }
+  try {
+    const res = await api(`/api/pos/invoices/${invoiceId}/payments`, { method: 'POST', body: {
+      amount,
+      method: document.getElementById('recvMethod').value,
+      reference: document.getElementById('recvRef').value.trim(),
+      note: document.getElementById('recvNote').value.trim(),
+    }});
+    toast(`Payment saved; balance ₹${Number(res.balance_due).toFixed(2)}`, 'success');
+    invoiceDetail(invoiceId);
+  } catch (e) {
+    if (errorEl) errorEl.textContent = e.message;
+  }
 }
 
 let invoiceEditState = null;
@@ -2510,8 +2645,12 @@ async function paymentForm() {
     <h4>Receipts to deposit</h4>
     <div class="table-scroll"><table id="payCartTable"></table></div>
     <div class="pay-total"><strong>Total cash to deposit:</strong> <span id="payTotal">&#8377;0.00</span> <span id="payCount" class="hint"></span></div>
+    <div class="form-row"><label>Handed-over amount (optional)</label>
+      <input id="payAmount" type="number" min="0" step="0.01" placeholder="Leave blank to hand over the selected receipts in full" oninput="paymentPreview()">
+      <span id="payAvailable" class="hint"></span>
+    </div>
     <h4>Pending cash receipts</h4>
-    <p class="hint">Tick receipts to add them in bulk, or use the header checkbox to select all visible receipts. Filter by distributor to narrow the list. Only cash bills from this zone's leaders and distributors that have not been handed over appear here.</p>
+    <p class="hint">Tick receipts to add them in bulk, or use the header checkbox to select all visible receipts. Filter by distributor to narrow the list. Only cash that this zone's leaders and distributors have collected and not yet handed over appears here. An amount is allocated oldest-bill-first, so a bill can be handed over in several instalments.</p>
     <div class="table-scroll"><table id="payPendingTable"></table></div>
     <div class="toolbar" style="margin-top:10px"><button class="action" onclick="paymentAddSelected()">Add selected</button></div>
     <div class="form-row"><label>Note (optional)</label><input id="payNote" placeholder="e.g. Counted by the temple treasurer"></div>
@@ -2581,15 +2720,16 @@ function paymentPendingRender() {
   const someChecked = rows.some(r => picked.has(r.invoice_number));
   table.innerHTML = `<tr>
       <th class="pay-pick-head"><input type="checkbox" id="payPickAll" ${allChecked ? 'checked' : ''} onchange="paymentToggleAll(this.checked)" aria-label="Select all pending receipts"></th>
-      <th>Receipt</th><th>Billed by</th><th>Date</th><th>Amount</th>
+      <th>Receipt</th><th>Billed by</th><th>Date</th><th>Invoice total</th><th>Available cash</th>
     </tr>` +
     (rows.map(r => `<tr>
       <td><input type="checkbox" class="pay-pick" data-receipt="${esc(r.invoice_number)}" ${picked.has(r.invoice_number) ? 'checked' : ''} onchange="paymentTogglePick(this)" aria-label="Add ${esc(r.invoice_number)}"></td>
       <td>${esc(r.invoice_number)}</td>
       <td>${esc(r.cashier_name || '—')}${r.cashier_role === 'distributor' ? '<span class="cart-book-barcode">distributor</span>' : ''}</td>
       <td>${esc(formatAuditTime(r.created_at))}</td>
-      <td>&#8377;${Number(r.total).toFixed(2)}</td>
-    </tr>`).join('') || `<tr><td colspan="5" class="hint">${filter && filter.value ? 'No pending cash receipts from this distributor.' : 'No pending cash receipts for this zone admin.'}</td></tr>`);
+      <td>&#8377;${Number(r.invoice_total || 0).toFixed(2)}</td>
+      <td><strong>&#8377;${Number(r.remittable || 0).toFixed(2)}</strong></td>
+    </tr>`).join('') || `<tr><td colspan="6" class="hint">${filter && filter.value ? 'No pending cash receipts from this distributor.' : 'No pending cash receipts for this zone admin.'}</td></tr>`);
   const head = document.getElementById('payPickAll');
   if (head) head.indeterminate = someChecked && !allChecked;
 }
@@ -2619,40 +2759,47 @@ function paymentPendingSyncPickAll() {
   head.indeterminate = !head.checked && rows.some(r => picked.has(r.invoice_number));
 }
 
-function paymentRenderCart(items, total, count) {
+function paymentRenderCart(items, total, count, available) {
   const table = document.getElementById('payCartTable');
   if (!table) return;
-  table.innerHTML = `<tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th>Location</th><th>Amount</th><th></th></tr>` +
+  table.innerHTML = `<tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th>Location</th><th>Invoice total</th><th>Invoice paid</th><th>Balance</th><th>Handing over</th><th></th></tr>` +
     (items.map(i => `<tr>
       <td>${esc(i.invoice_number)}</td>
       <td>${esc(i.cashier_name || '—')}</td>
       <td>${esc(formatAuditTime(i.created_at))}</td>
       <td>${esc(i.location_name)}</td>
-      <td>&#8377;${Number(i.amount).toFixed(2)}</td>
+      <td>&#8377;${Number(i.invoice_total ?? i.amount).toFixed(2)}</td>
+      <td>&#8377;${Number(i.amount_paid ?? i.amount).toFixed(2)}</td>
+      <td>&#8377;${Number(i.balance_due ?? 0).toFixed(2)}</td>
+      <td><strong>&#8377;${Number(i.amount).toFixed(2)}</strong></td>
       <td><button class="danger" data-receipt="${esc(i.invoice_number)}" onclick="paymentRemoveReceipt(this.dataset.receipt)" aria-label="Remove ${esc(i.invoice_number)}">&times;</button></td>
-    </tr>`).join('') || '<tr><td colspan="6" class="hint">No receipts selected yet.</td></tr>');
+    </tr>`).join('') || '<tr><td colspan="9" class="hint">No receipts selected yet.</td></tr>');
   const totalEl = document.getElementById('payTotal');
   if (totalEl) totalEl.innerHTML = '&#8377;' + Number(total).toFixed(2);
   const countEl = document.getElementById('payCount');
   if (countEl) countEl.textContent = count ? `${count} receipt${count === 1 ? '' : 's'}` : '';
+  const availEl = document.getElementById('payAvailable');
+  if (availEl) availEl.textContent = available == null ? '' : `Available to hand over: ₹${Number(available).toFixed(2)}`;
 }
 
 async function paymentPreview() {
   const errorEl = document.getElementById('payError');
-  if (!state.payNumbers.length) {
+  const amountEl = document.getElementById('payAmount');
+  const amountRaw = amountEl ? amountEl.value.trim() : '';
+  if (!state.payNumbers.length && amountRaw === '') {
     if (errorEl) errorEl.textContent = '';
     paymentRenderCart([], 0, 0);
     return;
   }
   const userSelect = document.getElementById('payUser');
   if (!userSelect) return;
+  const body = { user_id: Number(userSelect.value), receipt_numbers: state.payNumbers };
+  if (amountRaw !== '') body.amount = Number(amountRaw);
   try {
-    const res = await api('/api/payments/preview', { method: 'POST', body: {
-      user_id: Number(userSelect.value), receipt_numbers: state.payNumbers,
-    }});
-    state.payNumbers = res.items.map(i => i.invoice_number);
+    const res = await api('/api/payments/preview', { method: 'POST', body });
+    if (amountRaw === '') state.payNumbers = res.items.map(i => i.invoice_number);
     if (errorEl) errorEl.textContent = res.errors.join(' ');
-    paymentRenderCart(res.items, res.total, res.count);
+    paymentRenderCart(res.items, res.total, res.count, res.available);
   } catch (e) {
     if (errorEl) errorEl.textContent = e.message;
   }
@@ -2671,14 +2818,21 @@ function paymentRemoveReceipt(number) {
 }
 
 async function paymentSubmit() {
-  if (!state.payNumbers.length) { toast('Select at least one pending receipt', 'error'); return; }
+  const amountEl = document.getElementById('payAmount');
+  const amountRaw = amountEl ? amountEl.value.trim() : '';
+  if (!state.payNumbers.length && amountRaw === '') {
+    toast('Select at least one pending receipt or enter a handed-over amount', 'error');
+    return;
+  }
   const userSelect = document.getElementById('payUser');
+  const body = {
+    user_id: Number(userSelect.value),
+    receipt_numbers: state.payNumbers,
+    note: document.getElementById('payNote').value.trim(),
+  };
+  if (amountRaw !== '') body.amount = Number(amountRaw);
   try {
-    const res = await api('/api/payments', { method: 'POST', body: {
-      user_id: Number(userSelect.value),
-      receipt_numbers: state.payNumbers,
-      note: document.getElementById('payNote').value.trim(),
-    }});
+    const res = await api('/api/payments', { method: 'POST', body });
     toast('Payment confirmed: ' + res.receipt_number, 'success');
     paymentDetail(res.id);
   } catch (e) { toast(e.message, 'error'); }
@@ -2697,15 +2851,18 @@ async function paymentDetail(paymentId) {
     <p class="hint">Handed over by <strong>${esc(p.zone_admin_name)}</strong> (${esc(p.zone_admin_username)})
       on ${esc(formatAuditTime(p.created_at))} &middot; confirmed by ${esc(p.recorded_by_name)}</p>
     <div class="table-scroll"><table id="payDetailTable">
-      <tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th>Location</th><th>Amount</th></tr>
+      <tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th>Location</th><th>Invoice total</th><th>Invoice paid</th><th>Handed over</th><th>Balance</th></tr>
       ${p.items.map(i => `<tr>
         <td>${esc(i.invoice_number)}</td>
         <td>${esc(i.cashier_name || '—')}</td>
         <td>${esc(formatAuditTime(i.created_at))}</td>
         <td>${esc(i.location_name)}</td>
-        <td>&#8377;${Number(i.amount).toFixed(2)}</td>
+        <td>&#8377;${Number(i.invoice_total || 0).toFixed(2)}</td>
+        <td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td>
+        <td><strong>&#8377;${Number(i.amount).toFixed(2)}</strong></td>
+        <td>&#8377;${Number(i.balance_due || 0).toFixed(2)}</td>
       </tr>`).join('')}
-      <tr><td colspan="4" style="text-align:right"><strong>Total</strong></td><td><strong>&#8377;${Number(p.amount).toFixed(2)}</strong></td></tr>
+      <tr><td colspan="6" style="text-align:right"><strong>Total cash received</strong></td><td><strong>&#8377;${Number(p.amount).toFixed(2)}</strong></td><td></td></tr>
     </table></div>
     ${p.note ? `<p class="hint">Note: ${esc(p.note)}</p>` : ''}
     <div class="toolbar" style="margin-top:14px">
