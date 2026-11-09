@@ -601,6 +601,52 @@ code, handed_contact = call("PATCH", f"/api/pos/invoices/{zone_inv['invoice_id']
 check("handed-over invoice contact can still be corrected", code == 200
       and handed_contact["customer_phone"] == "9000000001", handed_contact)
 
+# --- distributor self-edit and zone-admin distributor attribution ---
+code, self_edit = call("PATCH", f"/api/pos/invoices/{led['invoice_id']}", token=dist_t, body={
+    "customer_phone": "9111111111",
+})
+check("distributor can edit their own bill", code == 200
+      and self_edit["customer_phone"] == "9111111111", self_edit)
+code, attributed = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Distributor Sale", "customer_phone": "9999999999",
+    "payment_mode": "cash", "distributor_id": dist_me["user"]["id"],
+    "items": [{"barcode": "9780892132517", "qty": 1}],
+})
+check("zone admin can bill for a distributor in their zone", code == 200
+      and attributed.get("invoice_number", "").startswith("INV-leader-temple-zone-"), attributed)
+code, attributed_detail = call("GET", f"/api/pos/invoices/{attributed['invoice_id']}", token=dist_t)
+check("distributor can open an invoice credited to them", code == 200
+      and attributed_detail["distributor_id"] == dist_me["user"]["id"]
+      and attributed_detail["cashier_id"] != dist_me["user"]["id"], attributed_detail)
+code, dist_rows = call("GET", "/api/pos/invoices", token=dist_t)
+check("distributor history includes invoices credited to them", code == 200
+      and any(row["id"] == attributed["invoice_id"] for row in dist_rows))
+code, attributed_edit = call("PATCH", f"/api/pos/invoices/{attributed['invoice_id']}", token=dist_t, body={
+    "customer_name": "Distributor Corrected",
+})
+check("distributor can edit an invoice credited to them", code == 200
+      and attributed_edit["customer_name"] == "Distributor Corrected", attributed_edit)
+
+code, other_dist = call("POST", "/api/users", token=super_t, body={
+    "username": "smoke-distributor-other", "password": "dist123", "name": "Other Distributor",
+    "role": "distributor", "zone_id": 3,
+})
+other_dist_t = login("smoke-distributor-other", "dist123")
+code, _ = call("PATCH", f"/api/pos/invoices/{attributed['invoice_id']}", token=other_dist_t, body={
+    "customer_name": "Not mine",
+})
+check("another distributor cannot edit the invoice", code == 403)
+code, _ = call("GET", f"/api/pos/invoices/{attributed['invoice_id']}", token=other_dist_t)
+check("another distributor cannot open the invoice", code == 403)
+code, _ = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Wrong Zone", "customer_phone": "9999999999", "payment_mode": "cash",
+    "distributor_id": other_dist.get("id"),
+    "items": [{"barcode": "9780892131343", "qty": 1}],
+})
+check("zone admin cannot bill for another zone's distributor", code == 403)
+code, _ = call("DELETE", f"/api/users/{other_dist.get('id')}", token=super_t)
+check("removed the other distributor", code == 200)
+
 # --- catalogue CRUD ---
 code, found = call("GET", "/api/books?q=Bhagavad-gita", token=super_t)
 check("book search filters by title", code == 200 and len(found) == 1 and found[0]["id"] == 1)

@@ -81,8 +81,8 @@ def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", 
              WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
     params = list(ids)
     if user["role"] == "distributor":
-        sql += " AND i.cashier_id = ?"
-        params.append(user["id"])
+        sql += " AND (i.cashier_id = ? OR i.distributor_id = ?)"
+        params.extend([user["id"], user["id"]])
     sql += " ORDER BY i.id DESC"
     return [dict(r) for r in db.execute(sql, params).fetchall()]
 
@@ -107,8 +107,8 @@ def export_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin"
              WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
     params = list(ids)
     if user["role"] == "distributor":
-        sql += " AND i.cashier_id = ?"
-        params.append(user["id"])
+        sql += " AND (i.cashier_id = ? OR i.distributor_id = ?)"
+        params.extend([user["id"], user["id"]])
     sql += " ORDER BY i.id DESC, ii.id"
     return [dict(row) for row in db.execute(sql, params).fetchall()]
 
@@ -143,17 +143,19 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     loc = db.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
     distributor_id = None
     if data.distributor_id is not None:
-        if user["role"] != "super_admin":
-            raise HTTPException(403, "Only a super admin can assign a sale to a distributor")
+        if user["role"] not in ("super_admin", "zone_admin"):
+            raise HTTPException(403, "Only a super admin or zone admin can assign a sale to a distributor")
         distributor = db.execute(
             """SELECT id, zone_id FROM users
                WHERE id = ? AND role = 'distributor' AND is_active = 1""",
             (data.distributor_id,),
         ).fetchone()
-        if loc["type"] != "warehouse":
-            raise HTTPException(400, "Distributor attribution is only available for warehouse sales")
         if not distributor:
             raise HTTPException(400, "Select an active distributor")
+        if user["role"] == "zone_admin" and distributor["zone_id"] != user["zone_id"]:
+            raise HTTPException(403, "Zone admins can only bill for distributors in their own zone")
+        if loc["type"] != "warehouse" and distributor["zone_id"] != loc_id:
+            raise HTTPException(400, "The distributor must belong to the billing zone")
         distributor_id = distributor["id"]
 
     resolved_by_book = {}
@@ -261,7 +263,7 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
         raise HTTPException(404, "Invoice not found")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
-    if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
+    if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
         raise HTTPException(403, "Distributors can only access their own bills")
     items = db.execute(
         """SELECT ii.*, b.title, b.barcode
@@ -278,7 +280,7 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
 
 
 @router.patch("/invoices/{invoice_id}")
-def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
+def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "distributor"))):
     inv = db.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
@@ -286,6 +288,8 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
         raise HTTPException(409, "Only paid invoices can be edited")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
+    if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
+        raise HTTPException(403, "Distributors can only edit their own bills")
 
     handed_over = db.execute(
         "SELECT 1 FROM cash_submission_items WHERE invoice_id = ?", (invoice_id,)
@@ -573,7 +577,7 @@ def print_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_role
         raise HTTPException(409, "Only paid invoices can be printed as receipts")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
-    if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
+    if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
         raise HTTPException(403, "Distributors can only access their own bills")
     items = db.execute(
         """SELECT ii.*, b.title, b.barcode
@@ -602,7 +606,7 @@ def download_invoice_pdf(invoice_id: int, db=Depends(get_db), user=Depends(requi
         raise HTTPException(409, "Only paid invoices can be downloaded as receipts")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
-    if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
+    if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
         raise HTTPException(403, "Distributors can only access their own bills")
     items = db.execute(
         """SELECT ii.*, b.title, b.barcode
@@ -627,7 +631,7 @@ def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(404, "Invoice not found")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
-    if user["role"] == "distributor" and inv["cashier_id"] != user["id"]:
+    if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
         raise HTTPException(403, "Distributors can only access their own bills")
     handed_over = db.execute(
         "SELECT 1 FROM cash_submission_items WHERE invoice_id = ?", (invoice_id,)

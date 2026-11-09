@@ -1366,7 +1366,7 @@ async function pos() {
   const [books, locs, users] = await Promise.all([
     api('/api/books'),
     api('/api/locations'),
-    state.user.role === 'super_admin' ? api('/api/users') : Promise.resolve([]),
+    state.user.role === 'super_admin' || state.user.role === 'zone_admin' ? api('/api/users') : Promise.resolve([]),
   ]);
   state.books = books;
   state.locations = locs;
@@ -1433,10 +1433,22 @@ async function pos() {
 
 function renderPosDistributorOptions() {
   const row = document.getElementById('posDistributorRow');
+  if (!row) return;
+  if (!hasAnyRole('super_admin', 'zone_admin')) {
+    row.hidden = true;
+    row.innerHTML = '';
+    return;
+  }
   const locationSelect = document.getElementById('billLoc');
-  if (!row || !locationSelect || state.user.role !== 'super_admin') return;
-  const selectedLocation = state.locations.find(location => location.id === Number(locationSelect.value));
-  const distributors = selectedLocation?.type === 'warehouse' ? state.posDistributors : [];
+  const location = locationSelect
+    ? state.locations.find(l => l.id === Number(locationSelect.value))
+    : state.locations.find(l => l.id === state.user.zone_id);
+  const isSuper = state.user.role === 'super_admin';
+  // Super admins only attribute warehouse sales; zone admins attribute sales in
+  // their own zone to a distributor from that zone.
+  const distributors = isSuper
+    ? (location?.type === 'warehouse' ? state.posDistributors : [])
+    : state.posDistributors;
   if (!distributors.length) {
     row.hidden = true;
     row.innerHTML = '';
@@ -1444,12 +1456,14 @@ function renderPosDistributorOptions() {
   }
   const previous = document.getElementById('posDistributor')?.value || '';
   row.hidden = false;
-  row.innerHTML = `<label for="posDistributor">Credit this godown sale to a distributor (optional)</label>
+  row.innerHTML = `<label for="posDistributor">${isSuper
+    ? 'Credit this godown sale to a distributor (optional)'
+    : 'Credit this sale to a distributor in your zone (optional)'}</label>
     <select id="posDistributor">
       <option value="">No distributor attribution</option>
       ${distributors.map(distributor => `<option value="${distributor.id}"${String(distributor.id) === previous ? ' selected' : ''}>${esc(distributor.name)}</option>`).join('')}
     </select>
-    <span class="hint">The sale is credited to the distributor only; it is not assigned to a zone or added to distributor stock.</span>`;
+    <span class="hint">The sale is credited to the distributor only; it is not added to distributor stock.</span>`;
 }
 
 function toggleUpiQr() {
@@ -2205,17 +2219,26 @@ async function checkInvoicePayment(invoiceId) {
   }
 }
 
+function canEditInvoice(inv) {
+  if (inv.status !== 'paid') return false;
+  if (state.user.role === 'super_admin') return true;
+  if (state.user.role === 'distributor') {
+    return Number(inv.cashier_id) === state.user.id || Number(inv.distributor_id) === state.user.id;
+  }
+  return false;
+}
+
 async function invoiceList() {
   const rows = await api('/api/pos/invoices');
   const canDeleteAny = hasAnyRole('super_admin', 'zone_admin');
   openModal(`<h3>Invoice history</h3>
-    <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only.</p>
+    <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only. Distributors see bills credited to them.</p>
     <table>
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Actions</th></tr>
       ${rows.map(i => `<tr class="clickable-row" onclick="rowOpen(event, 'invoiceDetail', ${i.id})">
         <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td>
-        <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${i.status === 'paid' && state.user.role === 'super_admin' ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
+        <td>${i.status === 'paid' ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${i.status === 'paid' && canEditInvoice(i) ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="9" class="hint">No invoices yet.</td></tr>'}
     </table>`);
 }
@@ -2248,7 +2271,7 @@ async function invoiceDetail(invoiceId) {
     <div class="toolbar" style="margin-top:14px">
       ${paid ? `<button class="action" onclick="downloadInvoicePdf(${inv.id})">PDF</button>` : ''}
       ${paid ? `<button class="action" onclick="shareInvoice(${inv.id})">Share</button>` : ''}
-      ${paid && state.user.role === 'super_admin' ? `<button class="action" onclick="invoiceEdit(${inv.id})">Edit</button>` : ''}
+      ${paid && canEditInvoice(inv) ? `<button class="action" onclick="invoiceEdit(${inv.id})">Edit</button>` : ''}
       ${inv.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${inv.id})">Check payment</button>` : ''}
       <button class="action" onclick="invoiceList()">Back</button>
     </div>`);
