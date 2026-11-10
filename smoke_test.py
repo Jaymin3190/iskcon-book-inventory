@@ -463,6 +463,19 @@ code, dist_cash = call("POST", "/api/pos/invoices", token=dist_t, body={
 })
 check("distributor cash bill in the zone", code == 200 and dist_cash["total"] == 300.0, dist_cash)
 
+# A distributor bill is due to the zone at billing; its cash becomes remittable
+# only after the zone collects from the distributor.
+for billed in (led, dist_cash):
+    code, collected = call("POST", f"/api/pos/invoices/{billed['invoice_id']}/payments", token=zone_t, body={
+        "amount": billed["total"], "method": "cash", "note": "Collected from distributor",
+    })
+    check(f"zone leader collects a distributor bill of {billed['total']}", code == 200
+          and collected["status"] == "paid" and collected["balance_due"] == 0, collected)
+code, _ = call("POST", f"/api/pos/invoices/{dist_cash['invoice_id']}/payments", token=dist_t, body={
+    "amount": 1, "method": "cash",
+})
+check("distributors cannot collect from their own bill", code == 403)
+
 code, pending = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
 pending_numbers = {p["invoice_number"] for p in pending}
 check("pending cash receipts cover the whole zone team", code == 200
@@ -515,7 +528,12 @@ code, dist_cash_self = call("POST", "/api/pos/invoices", token=dist_t, body={
     "items": [{"barcode": "9780892132517", "qty": 1}],
 })
 check("distributor cash bill for the zone leader's own handover", code == 200
-      and dist_cash_self["total"] == 450.0, dist_cash_self)
+      and dist_cash_self["total"] == 450.0 and dist_cash_self["status"] == "unpaid", dist_cash_self)
+code, self_collected = call("POST", f"/api/pos/invoices/{dist_cash_self['invoice_id']}/payments", token=zone_t, body={
+    "amount": 450.0, "method": "cash", "note": "Collected from distributor",
+})
+check("zone leader collects their distributor's bill before handover", code == 200
+      and self_collected["status"] == "paid", self_collected)
 code, self_preview = call("POST", "/api/payments/preview", token=zone_t, body={
     "user_id": zone_user_id, "receipt_numbers": [dist_cash_self["invoice_number"]],
 })
@@ -942,17 +960,25 @@ check("received transfer stock can be consumed before deletion", code == 200)
 code, _ = call("DELETE", f"/api/stock/transfers/{consumed_transfer_id}", token=super_t)
 check("received transfer deletion is blocked when destination stock is consumed", code == 409)
 
-# --- partial payments: godown deposit and later balance ---
+# --- partial payments: distributor settlement and later balance ---
 _, all_books = call("GET", "/api/books", token=super_t)
 book_seven = next(b for b in all_books if b["barcode"] == "9780892131565")
 godown_total = round(float(book_seven["price"]) * 2, 2)
 
+code, _ = call("POST", "/api/pos/invoices", token=super_t, body={
+    "location_id": 1, "customer_name": "Walk-in Partial", "customer_phone": "9999999999",
+    "payment_mode": "cash", "amount_received": 10,
+    "items": [{"barcode": book_seven["barcode"], "qty": 1}],
+})
+check("walk-in bills must be paid in full", code == 400)
+
 code, deposit = call("POST", "/api/pos/invoices", token=super_t, body={
-    "location_id": 1, "customer_name": "Godown Deposit", "customer_phone": "9999999999",
+    "location_id": 1, "customer_name": "Distributor Deposit", "customer_phone": "9999999999",
+    "distributor_id": dist_me["user"]["id"],
     "payment_mode": "cash", "amount_received": 80,
     "items": [{"barcode": book_seven["barcode"], "qty": 2}],
 })
-check("godown sale accepts a partial deposit", code == 200
+check("distributor bill accepts a partial collection at billing", code == 200
       and deposit["total"] == godown_total and deposit["amount_paid"] == 80.0
       and deposit["balance_due"] == godown_total - 80 and deposit["status"] == "partial", deposit)
 
@@ -1004,7 +1030,7 @@ check("sales report exposes collected and outstanding", warehouse_sales.get("col
               - max(0, float(warehouse_sales.get("revenue", 0)) - float(warehouse_sales.get("collected", 0)))) < 0.01,
       warehouse_sales)
 
-# --- distributor credit sale and a partial cash handover ---
+# --- distributor bill settled by the zone and a partial cash handover ---
 _, warehouse_rows_now = call("GET", "/api/stock?location_id=1", token=super_t)
 books_by_id = {b["id"]: b for b in all_books}
 credit_book = next(
@@ -1021,38 +1047,44 @@ topup_id = topup.get("id")
 call("POST", f"/api/stock/transfers/{topup_id}/approve", token=super_t)
 call("POST", f"/api/stock/transfers/{topup_id}/dispatch", token=super_t)
 call("POST", f"/api/stock/transfers/{topup_id}/receive", token=super_t)
-check("stock moved to the zone for the credit sale", code == 200, topup)
+check("stock moved to the zone for the distributor sale", code == 200, topup)
 
 code, credit = call("POST", "/api/pos/invoices", token=dist_t, body={
-    "customer_name": "Credit Customer", "customer_phone": "9999999999",
+    "customer_name": "Distributor Customer", "customer_phone": "9999999999",
     "payment_mode": "ledger",
     "items": [{"barcode": credit_book["barcode"], "qty": 1}],
 })
-check("distributor credit sale is unpaid at billing", code == 200
+check("distributor bill is due to the zone at billing", code == 200
       and credit["status"] == "unpaid" and credit["amount_paid"] == 0
-      and credit["balance_due"] == credit["total"], credit)
+      and credit["balance_due"] == credit["total"]
+      and credit["distributor_id"] == dist_me["user"]["id"], credit)
 
 code, credit_detail = call("GET", f"/api/pos/invoices/{credit['invoice_id']}", token=dist_t)
-check("credit invoice starts with no payment rows", code == 200
+check("distributor bill starts with no payment rows", code == 200
       and credit_detail["payments"] == [] and credit_detail["balance_due"] == credit["total"], credit_detail)
 
-code, credit_payment = call("POST", f"/api/pos/invoices/{credit['invoice_id']}/payments", token=dist_t, body={
+code, _ = call("POST", f"/api/pos/invoices/{credit['invoice_id']}/payments", token=dist_t, body={
     "amount": 50, "method": "cash", "note": "Collected from customer",
 })
-check("distributor can record a cash payment on credit", code == 200
+check("distributors cannot collect from their own bill", code == 403)
+
+code, credit_payment = call("POST", f"/api/pos/invoices/{credit['invoice_id']}/payments", token=zone_t, body={
+    "amount": 50, "method": "cash", "note": "Collected from distributor",
+})
+check("zone leader collects a partial payment from the distributor", code == 200
       and credit_payment["status"] == "partial"
       and credit_payment["amount_paid"] == 50
       and credit_payment["balance_due"] == credit["total"] - 50, credit_payment)
 
 _, dist_after_credit = call("GET", f"/api/reports/distributors/{dist_me['user']['id']}", token=zone_t)
 credit_row = next((row for row in dist_after_credit["invoices"] if row["id"] == credit["invoice_id"]), {})
-check("distributor report shows the credit balance", credit_row.get("amount_paid") == 50
+check("distributor report shows the outstanding balance", credit_row.get("amount_paid") == 50
       and credit_row.get("balance_due") == credit["total"] - 50
       and dist_after_credit["summary"]["outstanding"] >= credit["total"] - 50, credit_row)
 
 code, pending_credit = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
 credit_pending = next((row for row in pending_credit if row["invoice_number"] == credit["invoice_number"]), {})
-check("cash collected on credit is remittable", code == 200
+check("cash collected from the distributor is remittable", code == 200
       and credit_pending.get("remittable") == 50
       and credit_pending.get("cash_collected") == 50
       and credit_pending.get("cash_remitted") == 0, credit_pending)
@@ -1102,7 +1134,7 @@ check("fully handed-over cash leaves the pending list",
       not any(row["invoice_number"] == credit["invoice_number"] for row in pending_done), pending_done)
 
 code, credit_handover_detail = call("GET", f"/api/payments/{second_handover['id']}", token=temple_t)
-check("cash receipt shows invoice paid and customer balance", code == 200
+check("cash receipt shows the invoice received and amount due", code == 200
       and credit_handover_detail["items"][0]["amount_paid"] == 50
       and credit_handover_detail["items"][0]["balance_due"] == credit["total"] - 50,
       credit_handover_detail)

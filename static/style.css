@@ -341,6 +341,7 @@ table tr[hidden] { display: none !important; }
 .form-row { margin-bottom: 12px; }
 .form-row label { display: block; font-size: 12px; color: #6b5a3a; margin-bottom: 4px; }
 .form-row input, .form-row select, .form-row textarea { width: 100%; }
+.form-row input[type="checkbox"] { width: auto; margin-right: 6px; vertical-align: middle; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 #toast {

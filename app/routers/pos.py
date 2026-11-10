@@ -137,7 +137,8 @@ class InvoiceEditIn(BaseModel):
 @router.get("/invoices")
 def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     ids = invoice_location_ids(db, user)
-    sql = """SELECT i.*, l.code AS location_code, l.name AS location_name, u.name AS cashier_name,
+    sql = """SELECT i.*, l.code AS location_code, l.name AS location_name,
+                    u.name AS cashier_name, u.role AS cashier_role,
                     COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
                                WHERE p.invoice_id = i.id),0) AS amount_paid
              FROM invoices i
@@ -224,6 +225,10 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         if loc["type"] != "warehouse" and distributor["zone_id"] != loc_id:
             raise HTTPException(400, "The distributor must belong to the billing zone")
         distributor_id = distributor["id"]
+    if user["role"] == "distributor":
+        # A distributor always collects in full from the customer; the bill is
+        # therefore the distributor's payable to the zone until it is settled.
+        distributor_id = user["id"]
 
     resolved_by_book = {}
     for it in data.items:
@@ -247,19 +252,36 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     total = round(subtotal - discount, 2)
     if data.payment_mode == "razorpay" and total <= 0:
         raise HTTPException(400, "Razorpay payments must have a positive total")
+    if data.payment_mode == "razorpay" and distributor_id is not None:
+        raise HTTPException(400, "Distributor bills cannot use Razorpay")
+    if data.payment_mode == "ledger" and distributor_id is None:
+        raise HTTPException(400, "Credit bills must be assigned to a distributor")
 
-    amount_paid = total
-    status = "pending"
-    if data.payment_mode != "razorpay":
-        if data.amount_received is None:
-            amount_paid = 0.0 if data.payment_mode == "ledger" else total
-        else:
+    if distributor_id is not None:
+        # The distributor collected from the customer in full, so the bill is
+        # due to the zone. An amount may be collected at billing, in full or
+        # in part; the rest stays outstanding for a later collection.
+        amount_paid = 0.0
+        if data.amount_received is not None:
             amount_paid = round(float(data.amount_received), 2)
             if amount_paid < 0:
-                raise HTTPException(400, "Amount received cannot be negative")
+                raise HTTPException(400, "Amount collected cannot be negative")
             if amount_paid > total + 0.009:
-                raise HTTPException(400, "Amount received cannot exceed the invoice total")
+                raise HTTPException(400, "Amount collected cannot exceed the invoice total")
             amount_paid = min(amount_paid, total)
+        status = invoice_status_for(total, amount_paid)
+    elif data.payment_mode == "razorpay":
+        amount_paid = 0
+        status = "pending"
+    else:
+        # A walk-in sale is always settled in full at billing.
+        if data.amount_received is not None:
+            requested = round(float(data.amount_received), 2)
+            if requested < 0:
+                raise HTTPException(400, "Amount received cannot be negative")
+            if abs(requested - total) > 0.009:
+                raise HTTPException(400, "Walk-in bills must be paid in full")
+        amount_paid = total
         status = invoice_status_for(total, amount_paid)
 
     qr_code = None
@@ -328,6 +350,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         "balance_due": max(0, round(total - amount_paid, 2)),
         "status": status,
         "payment_mode": payment_label,
+        "distributor_id": distributor_id,
         "share_token": share_token,
     }
     if qr_code:
@@ -342,7 +365,8 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
 def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     inv = db.execute(
         """SELECT i.*, l.code AS location_code, l.name AS location_name,
-                  u.name AS cashier_name, d.name AS distributor_name,
+                  u.name AS cashier_name, u.role AS cashier_role,
+                  d.name AS distributor_name,
                   COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
                              WHERE p.invoice_id = i.id),0) AS amount_paid
            FROM invoices i
@@ -407,12 +431,12 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
     if handed_over and amount_change:
         raise HTTPException(
             409,
-            "This invoice has already been handed over to the temple. Void that payment-in before editing its items or amount.",
+            "This invoice is included in a cash handover to the temple, so its items and amount cannot be changed.",
         )
     if partially_paid and amount_change:
         raise HTTPException(
             409,
-            "Payments have already been recorded on this invoice. Void those payments before editing its items or amount.",
+            "Payments have already been collected against this invoice, so its items and amount cannot be changed.",
         )
     if razorpay_invoice and amount_change:
         raise HTTPException(
@@ -570,16 +594,14 @@ def receive_invoice_payment(
     invoice_id: int,
     data: InvoicePaymentIn,
     db=Depends(get_db),
-    user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple")),
+    user=Depends(require_roles("super_admin", "zone_admin")),
 ):
-    """Record money collected later against a partial or credit invoice."""
+    """Record money the zone collects from a distributor, in full or in part."""
     inv = db.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
     if not inv:
         raise HTTPException(404, "Invoice not found")
     if inv["location_id"] not in invoice_location_ids(db, user):
         raise HTTPException(403, "Forbidden")
-    if user["role"] == "distributor" and user["id"] not in (inv["cashier_id"], inv["distributor_id"]):
-        raise HTTPException(403, "Distributors can only collect payments for their own bills")
     if inv["razorpay_qr_code_id"] or inv["status"] in ("pending", "failed"):
         raise HTTPException(409, "Razorpay invoices are settled only by Razorpay and cannot take a manual payment")
     if data.method not in INVOICE_PAYMENT_METHODS:
@@ -861,7 +883,7 @@ def delete_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_rol
     if handed_over:
         raise HTTPException(
             409,
-            "This invoice has already been handed over to the temple. Void that payment-in first.",
+            "This invoice is included in a cash handover to the temple, so it cannot be deleted.",
         )
     if inv["status"] == "pending":
         raise HTTPException(409, "This invoice has a pending Razorpay payment and cannot be deleted")

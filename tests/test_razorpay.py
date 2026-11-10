@@ -175,7 +175,10 @@ class RazorpayIntegrationTests(unittest.TestCase):
             (result["invoice_id"],),
         ).fetchone()
         self.assertEqual(tuple(invoice), (2, 2, 3))
-        self.assertEqual(result["status"], "paid")
+        # A distributor bill is due to the zone until the zone collects it.
+        self.assertEqual(result["status"], "unpaid")
+        self.assertEqual(result["amount_paid"], 0)
+        self.assertEqual(result["balance_due"], 150.25)
 
     def test_razorpay_is_rejected_without_razorpay_credentials(self):
         data = pos.InvoiceIn(
