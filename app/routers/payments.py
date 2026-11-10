@@ -339,6 +339,18 @@ def list_zone_admins(db=Depends(get_db), user=Depends(require_roles(*RECORD_ROLE
     return [dict(r) for r in rows]
 
 
+def _pending_items(db, zone_id):
+    """Cash in a zone that the temple has not received yet."""
+    pending = []
+    for row in _zone_cash_rows(db, {"zone_id": zone_id}):
+        if row["status"] in ("pending", "failed"):
+            continue
+        if _receipt_error(row, zone_id) is not None:
+            continue
+        pending.append(_cash_item(row))
+    return pending
+
+
 @router.get("/pending")
 def pending_receipts(user_id: int, db=Depends(get_db), user=Depends(require_roles(*VIEW_ROLES))):
     """Zone-team cash bills still waiting to be handed over by a zone leader."""
@@ -348,15 +360,53 @@ def pending_receipts(user_id: int, db=Depends(get_db), user=Depends(require_role
         zone_user = user
     else:
         zone_user = _zone_admin(db, user_id, payment_zone_ids(db, user))
+    return _pending_items(db, zone_user["zone_id"])
 
-    pending = []
-    for row in _zone_cash_rows(db, zone_user):
-        if row["status"] in ("pending", "failed"):
+
+@router.get("/pending-summary")
+def pending_summary(db=Depends(get_db), user=Depends(require_roles("temple", "super_admin"))):
+    """How much the temple still has to collect from each zone.
+
+    The figure is the cash the zone team has collected from customers and
+    distributors but has not handed over to the temple yet. It is shown only to
+    the temple side; zone leaders see their own pending receipts instead.
+    """
+    ids = sorted(i for i in payment_zone_ids(db, user) if i is not None)
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    zones = db.execute(
+        f"""SELECT id, name, code FROM locations
+             WHERE type = 'zone' AND id IN ({placeholders})
+             ORDER BY name""",
+        ids,
+    ).fetchall()
+    admins = db.execute(
+        f"""SELECT id, name, username, zone_id FROM users
+             WHERE role = 'zone_admin' AND is_active = 1
+               AND zone_id IN ({placeholders})
+             ORDER BY name""",
+        ids,
+    ).fetchall()
+    admins_by_zone = {}
+    for admin in admins:
+        admins_by_zone.setdefault(admin["zone_id"], []).append(dict(admin))
+
+    summary = []
+    for zone in zones:
+        pending = _pending_items(db, zone["id"])
+        amount = round(sum(item["remittable"] for item in pending), 2)
+        if amount <= 0:
             continue
-        if _receipt_error(row, zone_user["zone_id"]) is not None:
-            continue
-        pending.append(_cash_item(row))
-    return pending
+        summary.append({
+            "zone_id": zone["id"],
+            "zone_name": zone["name"],
+            "zone_code": zone["code"],
+            "amount": amount,
+            "bills": len(pending),
+            "zone_admins": admins_by_zone.get(zone["id"], []),
+        })
+    return summary
 
 
 @router.post("/preview")

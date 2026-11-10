@@ -492,6 +492,19 @@ check("pending receipts expose cashier identity for the distributor filter", any
     for p in pending
 ), pending)
 
+code, summary = call("GET", "/api/payments/pending-summary", token=temple_t)
+check("temple sees how much it has to collect from each zone", code == 200
+      and any(z["zone_id"] == 2 and z["amount"] == 1300.0 and z["bills"] == 4 for z in summary),
+      summary)
+check("temple summary names the zone leader", any(
+    z["zone_id"] == 2 and any(a["username"] == "leader-temple-zone" for a in z["zone_admins"])
+    for z in summary
+), summary)
+code, _ = call("GET", "/api/payments/pending-summary", token=zone_t)
+check("zone leader cannot see the temple collection summary", code == 403)
+code, _ = call("GET", "/api/payments/pending-summary", token=dist_t)
+check("distributor cannot see the temple collection summary", code == 403)
+
 zone_team_numbers = [zone_inv["invoice_number"], zone_inv3["invoice_number"],
                      dist_cash["invoice_number"], led["invoice_number"]]
 code, preview = call("POST", "/api/payments/preview", token=temple_t, body={
@@ -573,6 +586,9 @@ code, _ = call("POST", "/api/payments", token=temple_t, body={
 check("a receipt cannot be handed over twice", code == 400)
 code, pending_after = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
 check("handed-over receipts leave the pending list", code == 200 and not pending_after, pending_after)
+code, summary_after = call("GET", "/api/payments/pending-summary", token=temple_t)
+check("temple collection summary clears once the zone hands over its cash", code == 200
+      and all(z["zone_id"] != 2 for z in summary_after), summary_after)
 
 code, zone_payments = call("GET", "/api/payments", token=zone_t)
 check("zone admin sees the temple confirmation", code == 200

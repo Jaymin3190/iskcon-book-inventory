@@ -2688,15 +2688,40 @@ async function invoiceDelete(invoiceId, view, ...args) {
 
 /* ---- payment in (cash handover to the temple) ---- */
 async function payments() {
-  const rows = await api('/api/payments');
+  const templeSide = hasAnyRole('temple', 'super_admin');
+  const [rows, pendingZones] = await Promise.all([
+    api('/api/payments'),
+    templeSide ? api('/api/payments/pending-summary') : Promise.resolve([]),
+  ]);
   const canRecord = hasAnyRole('super_admin', 'temple', 'zone_admin');
-  const selfOnly = !hasAnyRole('super_admin', 'temple');
+  const selfOnly = !templeSide;
   const total = rows.reduce((a, r) => a + Number(r.amount || 0), 0);
+  const pendingTotal = pendingZones.reduce((a, z) => a + Number(z.amount || 0), 0);
   document.getElementById('content').innerHTML = `
     <div class="stats">
       <div class="stat"><div class="num">${rows.length}</div><div class="lbl">Cash handovers</div></div>
       <div class="stat"><div class="num">&#8377;${total.toFixed(2)}</div><div class="lbl">Total cash received</div></div>
+      ${templeSide ? `<div class="stat"><div class="num">&#8377;${pendingTotal.toFixed(2)}</div><div class="lbl">To collect from zones</div></div>` : ''}
     </div>
+    ${templeSide ? `<div class="card">
+      <h2>Collect from zones</h2>
+      <p class="hint">Cash the zones have collected from customers and distributors but not yet handed over to the temple. Collect it here: the zone leader's receipts are ticked off in the confirmation.</p>
+      ${pendingZones.length ? `<div class="table-scroll"><table>
+        <tr><th>Zone</th><th>Zone leader</th><th>Pending bills</th><th>To collect</th><th></th></tr>
+        ${pendingZones.map(z => `<tr>
+          <td>${esc(z.zone_name)}</td>
+          <td>${z.zone_admins.length
+            ? esc(z.zone_admins.map(a => a.name).join(', '))
+            : '<span class="hint">No active zone leader</span>'}</td>
+          <td>${z.bills}</td>
+          <td><strong>&#8377;${Number(z.amount).toFixed(2)}</strong></td>
+          <td>${z.zone_admins.length
+            ? `<button class="primary" onclick="paymentForm(${z.zone_admins[0].id})">Collect</button>`
+            : ''}</td>
+        </tr>`).join('')}
+        <tr><td colspan="3" class="hint">Total pending</td><td><strong>&#8377;${pendingTotal.toFixed(2)}</strong></td><td></td></tr>
+      </table></div>` : '<p class="hint">Nothing is pending. Every zone has handed over the cash it collected.</p>'}
+    </div>` : ''}
     <div class="card">
       <h2>Payment in</h2>
       <p class="hint">${selfOnly
@@ -2721,13 +2746,16 @@ async function payments() {
     </div>`;
 }
 
-async function paymentForm() {
+async function paymentForm(zoneUserId = null) {
   let users;
   try { users = await api('/api/payments/zone-admins'); }
   catch (e) { toast(e.message, 'error'); return; }
   if (!users.length) { toast('No active zone admins found', 'error'); return; }
   const selfOnly = !hasAnyRole('super_admin', 'temple');
   const self = users[0];
+  const targetId = zoneUserId != null && users.some(u => u.id === Number(zoneUserId))
+    ? Number(zoneUserId)
+    : users[0].id;
   state.payZoneAdmins = users;
   openModal(`<h3>New payment in</h3>
     <p class="hint">${selfOnly
@@ -2737,7 +2765,7 @@ async function paymentForm() {
       <select id="payUser" ${selfOnly ? 'disabled' : 'onchange="paymentPendingLoad()"'}>
         ${selfOnly
           ? `<option value="${self.id}" selected>${esc(self.name)} &mdash; ${esc(self.zone_name)}</option>`
-          : users.map(u => `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
+          : users.map(u => `<option value="${u.id}"${u.id === targetId ? ' selected' : ''}>${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
       </select>
     </div>
     <div class="form-row"><label>Filter by distributor</label>
@@ -2748,6 +2776,7 @@ async function paymentForm() {
     <p id="payError" class="error"></p>
     <h4>Pending cash receipts</h4>
     <p class="hint">Tick the receipts being handed over. Use the header checkbox to select all visible receipts, or filter by distributor to narrow the list. Only cash that this zone's leaders and distributors have collected and not yet handed over appears here.</p>
+    <p id="payPendingTotal" class="hint"></p>
     <div class="table-scroll"><table id="payPendingTable"></table></div>
     <div class="pay-total"><strong>Selected:</strong> <span id="payTotal">&#8377;0.00</span> <span id="payCount" class="hint">No receipts selected</span></div>
     <div class="form-row"><label><input type="checkbox" id="payPartialToggle" onchange="paymentPartialToggle()"> Hand over a part amount</label></div>
@@ -2819,6 +2848,14 @@ function paymentPendingRender() {
     </tr>`).join('') || `<tr><td colspan="6" class="hint">${filter && filter.value ? 'No pending cash receipts from this distributor.' : 'No pending cash receipts for this zone admin.'}</td></tr>`);
   const head = document.getElementById('payPickAll');
   if (head) head.indeterminate = someChecked && !allChecked;
+  const pendingEl = document.getElementById('payPendingTotal');
+  if (pendingEl) {
+    const all = state.payPendingRows || [];
+    const totalPending = all.reduce((sum, r) => sum + Number(r.remittable || 0), 0);
+    pendingEl.innerHTML = all.length
+      ? `Pending in this zone: <strong>&#8377;${totalPending.toFixed(2)}</strong> across ${all.length} bill${all.length === 1 ? '' : 's'}.`
+      : 'Nothing is pending in this zone.';
+  }
   paymentUpdateSummary();
 }
 
