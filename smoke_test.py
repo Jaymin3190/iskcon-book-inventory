@@ -452,8 +452,9 @@ zone_user_id = zone_me["user"]["id"]
 code, pay_admins = call("GET", "/api/payments/zone-admins", token=temple_t)
 check("temple admin can list zone admins for payment in", code == 200
       and any(u["username"] == "leader-temple-zone" for u in pay_admins), pay_admins)
-code, _ = call("GET", "/api/payments/zone-admins", token=zone_t)
-check("zone admin cannot list pay-in zone admins", code == 403)
+code, zone_pay_admins = call("GET", "/api/payments/zone-admins", token=zone_t)
+check("zone leader sees only themselves for payment in", code == 200
+      and len(zone_pay_admins) == 1 and zone_pay_admins[0]["id"] == zone_user_id, zone_pay_admins)
 
 code, dist_cash = call("POST", "/api/pos/invoices", token=dist_t, body={
     "customer_name": "Zone collection", "customer_phone": "9999999999",
@@ -495,10 +496,43 @@ code, preview_bad = call("POST", "/api/payments/preview", token=temple_t, body={
 })
 check("payment preview rejects temple-billed and unknown receipts", code == 200
       and preview_bad["count"] == 0 and len(preview_bad["errors"]) == 2, preview_bad)
-code, _ = call("POST", "/api/payments", token=zone_t, body={
-    "user_id": zone_user_id, "receipt_numbers": [zone_inv["invoice_number"]],
+_, other_zone_me = call("GET", "/api/auth/me", token=other_zone_t)
+other_zone_user_id = other_zone_me["user"]["id"]
+code, _ = call("GET", f"/api/payments/pending?user_id={other_zone_user_id}", token=zone_t)
+check("zone leader cannot view another zone's pending cash", code == 403)
+code, _ = call("POST", "/api/payments/preview", token=zone_t, body={
+    "user_id": other_zone_user_id, "receipt_numbers": [zone_inv["invoice_number"]],
 })
-check("zone admin cannot record a payment in", code == 403)
+check("zone leader cannot preview another zone's handover", code == 403)
+code, _ = call("POST", "/api/payments", token=zone_t, body={
+    "user_id": other_zone_user_id, "receipt_numbers": [zone_inv["invoice_number"]],
+})
+check("zone leader cannot record another zone's handover", code == 403)
+
+code, dist_cash_self = call("POST", "/api/pos/invoices", token=dist_t, body={
+    "customer_name": "Zone leader handover", "customer_phone": "9999999999",
+    "payment_mode": "cash",
+    "items": [{"barcode": "9780892132517", "qty": 1}],
+})
+check("distributor cash bill for the zone leader's own handover", code == 200
+      and dist_cash_self["total"] == 450.0, dist_cash_self)
+code, self_preview = call("POST", "/api/payments/preview", token=zone_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [dist_cash_self["invoice_number"]],
+})
+check("zone leader previews their distributor's cash", code == 200
+      and self_preview["total"] == 450.0 and not self_preview["errors"], self_preview)
+code, zone_payment = call("POST", "/api/payments", token=zone_t, body={
+    "user_id": zone_user_id, "receipt_numbers": [dist_cash_self["invoice_number"]],
+    "note": "Handed over by the zone leader",
+})
+check("zone leader records their distributor's cash handover", code == 200
+      and zone_payment["amount"] == 450.0
+      and zone_payment["submitted_by"] == zone_user_id
+      and zone_payment["recorded_by"] == zone_user_id, zone_payment)
+code, pending_self = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=zone_t)
+check("self recorded handover leaves the zone leader's pending list", code == 200
+      and all(p["invoice_number"] != dist_cash_self["invoice_number"] for p in pending_self),
+      pending_self)
 
 code, payment = call("POST", "/api/payments", token=temple_t, body={
     "user_id": zone_user_id,

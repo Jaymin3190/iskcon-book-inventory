@@ -2586,7 +2586,8 @@ async function invoiceDelete(invoiceId, view, ...args) {
 /* ---- payment in (cash handover to the temple) ---- */
 async function payments() {
   const rows = await api('/api/payments');
-  const canRecord = hasAnyRole('super_admin', 'temple');
+  const canRecord = hasAnyRole('super_admin', 'temple', 'zone_admin');
+  const selfOnly = !hasAnyRole('super_admin', 'temple');
   const total = rows.reduce((a, r) => a + Number(r.amount || 0), 0);
   document.getElementById('content').innerHTML = `
     <div class="stats">
@@ -2595,12 +2596,14 @@ async function payments() {
     </div>
     <div class="card">
       <h2>Payment in</h2>
-      <p class="hint">${canRecord
+      <p class="hint">${selfOnly
+        ? 'Record the cash you have handed over to the temple, including the cash billed by your distributors in your zone. Open or print any receipt below.'
+        : canRecord
         ? 'Record cash handed over by a zone leader. This includes the cash billed by their distributors, and the total is summed from the receipt numbers.'
         : 'Cash you have handed over to the temple, including your distributors\' cash. Open or print any confirmation below.'}</p>
       <div class="toolbar">${canRecord ? '<button class="primary" onclick="paymentForm()">New payment in</button>' : ''}</div>
       <div class="table-scroll"><table>
-        <tr><th>Receipt</th><th>Date</th><th>Zone admin</th><th>Zone</th><th>Receipts</th><th>Cash received</th><th>Confirmed by</th><th>Actions</th></tr>
+        <tr><th>Receipt</th><th>Date</th><th>Zone admin</th><th>Zone</th><th>Receipts</th><th>Cash received</th><th>Recorded by</th><th>Actions</th></tr>
         ${rows.map(r => `<tr class="clickable-row" onclick="rowOpen(event, 'paymentDetail', ${r.id})">
           <td>${esc(r.receipt_number)}</td>
           <td>${esc(formatAuditTime(r.created_at))}</td>
@@ -2620,20 +2623,26 @@ async function paymentForm() {
   try { users = await api('/api/payments/zone-admins'); }
   catch (e) { toast(e.message, 'error'); return; }
   if (!users.length) { toast('No active zone admins found', 'error'); return; }
+  const selfOnly = !hasAnyRole('super_admin', 'temple');
+  const self = users[0];
   state.payNumbers = [];
   state.payZoneAdmins = users;
   const zones = [...new Map(users.map(u => [u.zone_id, u.zone_name])).entries()];
   openModal(`<h3>New payment in</h3>
-    <p class="hint">Select the zone leader handing over cash, then choose the pending cash receipts they are depositing. Receipts billed by their distributors count too.</p>
-    <div class="form-row"><label>Filter by zone</label>
+    <p class="hint">${selfOnly
+      ? 'Choose the pending cash receipts you are handing over to the temple. This includes cash billed by your distributors in your zone. Each receipt leaves the pending list once you record the handover.'
+      : 'Select the zone leader handing over cash, then choose the pending cash receipts they are depositing. Receipts billed by their distributors count too.'}</p>
+    ${selfOnly ? '' : `<div class="form-row"><label>Filter by zone</label>
       <select id="payZoneFilter" onchange="paymentZoneChanged()">
         <option value="">All zones</option>
         ${zones.map(([id, name]) => `<option value="${id}">${esc(name)}</option>`).join('')}
       </select>
-    </div>
-    <div class="form-row"><label>Zone admin</label>
-      <select id="payUser" onchange="paymentPendingLoad()">
-        ${users.map(u => `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
+    </div>`}
+    <div class="form-row"><label>${selfOnly ? 'Handing over as' : 'Zone admin'}</label>
+      <select id="payUser" ${selfOnly ? 'disabled' : 'onchange="paymentPendingLoad()"'}>
+        ${selfOnly
+          ? `<option value="${self.id}" selected>${esc(self.name)} &mdash; ${esc(self.zone_name)}</option>`
+          : users.map(u => `<option value="${u.id}">${esc(u.name)} &mdash; ${esc(u.zone_name)}</option>`).join('')}
       </select>
     </div>
     <div class="form-row"><label>Filter by distributor</label>
@@ -2654,7 +2663,7 @@ async function paymentForm() {
     <div class="table-scroll"><table id="payPendingTable"></table></div>
     <div class="toolbar" style="margin-top:10px"><button class="action" onclick="paymentAddSelected()">Add selected</button></div>
     <div class="form-row"><label>Note (optional)</label><input id="payNote" placeholder="e.g. Counted by the temple treasurer"></div>
-    <div class="toolbar"><button class="primary" onclick="paymentSubmit()">Confirm payment &amp; generate receipt</button><button class="action" onclick="closeModal()">Cancel</button></div>`);
+    <div class="toolbar"><button class="primary" onclick="paymentSubmit()">${selfOnly ? 'Record handover' : 'Confirm payment'} &amp; generate receipt</button><button class="action" onclick="closeModal()">Cancel</button></div>`);
   paymentRenderCart([], 0, 0);
   await paymentPendingLoad();
 }
@@ -2849,7 +2858,7 @@ async function paymentDetail(paymentId) {
       ${miniStat('Zone', esc(p.zone_name))}
     </div>
     <p class="hint">Handed over by <strong>${esc(p.zone_admin_name)}</strong> (${esc(p.zone_admin_username)})
-      on ${esc(formatAuditTime(p.created_at))} &middot; confirmed by ${esc(p.recorded_by_name)}</p>
+      on ${esc(formatAuditTime(p.created_at))} &middot; recorded by ${esc(p.recorded_by_name)}</p>
     <div class="table-scroll"><table id="payDetailTable">
       <tr><th>Receipt</th><th>Billed by</th><th>Billed at</th><th>Location</th><th>Invoice total</th><th>Invoice paid</th><th>Handed over</th><th>Balance</th></tr>
       ${p.items.map(i => `<tr>

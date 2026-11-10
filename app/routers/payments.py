@@ -15,7 +15,7 @@ from ..services.timezone import format_ist_datetime
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
-RECORD_ROLES = ("super_admin", "temple")
+RECORD_ROLES = ("super_admin", "temple", "zone_admin")
 VIEW_ROLES = ("super_admin", "temple", "zone_admin")
 
 
@@ -68,6 +68,20 @@ def _zone_admin(db, user_id: int, allowed_zone_ids: set):
     if row["zone_id"] not in allowed_zone_ids:
         raise HTTPException(403, "That zone admin is outside your temple")
     return row
+
+
+def _zone_user_for(db, user, user_id: int):
+    """Resolve whose cash is being handed over.
+
+    A temple or super admin may record a handover for any zone admin in their
+    scope. A zone leader records only their own handover, so they must pass
+    their own user id and are pinned to their own zone.
+    """
+    if user["role"] == "zone_admin":
+        if user_id != user["id"]:
+            raise HTTPException(403, "Zone leaders can only record their own cash handover")
+        return _zone_admin(db, user_id, {user["zone_id"]})
+    return _zone_admin(db, user_id, payment_zone_ids(db, user))
 
 
 def _zone_cash_rows(db, zone_user):
@@ -305,17 +319,23 @@ def _authorize_view(db, user, payment) -> None:
 
 @router.get("/zone-admins")
 def list_zone_admins(db=Depends(get_db), user=Depends(require_roles(*RECORD_ROLES))):
-    """Zone admins this temple may receive cash from."""
+    """Zone admins this user may receive cash from.
+
+    A zone leader only ever receives their own handover, so the list is just
+    themselves.
+    """
     ids = payment_zone_ids(db, user)
-    rows = db.execute(
-        """SELECT u.id, u.name, u.username, u.zone_id, z.name AS zone_name
-             FROM users u
-             JOIN locations z ON z.id = u.zone_id
-            WHERE u.role = 'zone_admin' AND u.is_active = 1
-              AND u.zone_id IN ({})
-            ORDER BY z.name, u.name""".format(",".join("?" * len(ids))),
-        list(ids),
-    ).fetchall()
+    sql = """SELECT u.id, u.name, u.username, u.zone_id, z.name AS zone_name
+               FROM users u
+               JOIN locations z ON z.id = u.zone_id
+              WHERE u.role = 'zone_admin' AND u.is_active = 1
+                AND u.zone_id IN ({})""".format(",".join("?" * len(ids)))
+    params = list(ids)
+    if user["role"] == "zone_admin":
+        sql += " AND u.id = ?"
+        params.append(user["id"])
+    sql += " ORDER BY z.name, u.name"
+    rows = db.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -342,7 +362,7 @@ def pending_receipts(user_id: int, db=Depends(get_db), user=Depends(require_role
 @router.post("/preview")
 def preview_payment(data: PaymentPreviewIn, db=Depends(get_db), user=Depends(require_roles(*RECORD_ROLES))):
     """Auto-sum entered receipts or allocate a handed-over amount."""
-    zone_user = _zone_admin(db, data.user_id, payment_zone_ids(db, user))
+    zone_user = _zone_user_for(db, user, data.user_id)
     items, errors = _resolve_receipts(
         db, zone_user, data.receipt_numbers, data.amount, data.allocations
     )
@@ -364,7 +384,7 @@ def preview_payment(data: PaymentPreviewIn, db=Depends(get_db), user=Depends(req
 
 @router.post("")
 def create_payment(data: PaymentIn, db=Depends(get_db), user=Depends(require_roles(*RECORD_ROLES))):
-    zone_user = _zone_admin(db, data.user_id, payment_zone_ids(db, user))
+    zone_user = _zone_user_for(db, user, data.user_id)
     try:
         db.execute("BEGIN IMMEDIATE")
     except sqlite3.OperationalError as error:
@@ -475,7 +495,7 @@ def receipt_html(payment) -> str:
     <p class="sub">Received from: <strong>{escape(str(payment['zone_admin_name']))}</strong>
       ({escape(str(payment['zone_admin_username']))})</p>
     <p class="sub">Zone: {escape(str(payment['zone_name']))}
-      &nbsp;|&nbsp; Confirmed by: {escape(str(payment['recorded_by_name']))}</p>
+      &nbsp;|&nbsp; Recorded by: {escape(str(payment['recorded_by_name']))}</p>
     <table>
       <tr><th>Receipt</th><th>Billed by</th><th>Billed at</th>
         <th class="r">Invoice total</th><th class="r">Invoice paid</th>
