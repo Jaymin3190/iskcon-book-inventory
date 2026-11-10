@@ -496,6 +496,9 @@ code, summary = call("GET", "/api/payments/pending-summary", token=temple_t)
 check("temple sees how much it has to collect from each zone", code == 200
       and any(z["zone_id"] == 2 and z["amount"] == 1300.0 and z["bills"] == 4 for z in summary),
       summary)
+code, super_summary = call("GET", "/api/payments/pending-summary", token=super_t)
+check("super admin sees the same temple collection summary", code == 200
+      and any(z["zone_id"] == 2 and z["amount"] == 1300.0 for z in super_summary), super_summary)
 check("temple summary names the zone leader", any(
     z["zone_id"] == 2 and any(a["username"] == "leader-temple-zone" for a in z["zone_admins"])
     for z in summary
