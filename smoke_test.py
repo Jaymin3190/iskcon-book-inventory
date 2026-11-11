@@ -463,6 +463,33 @@ code, dist_cash = call("POST", "/api/pos/invoices", token=dist_t, body={
 })
 check("distributor cash bill in the zone", code == 200 and dist_cash["total"] == 300.0, dist_cash)
 
+# A zone leader can take several bills from the same distributor in one action.
+bulk_bills = []
+for customer in ("Bulk collection one", "Bulk collection two"):
+    code, bill = call("POST", "/api/pos/invoices", token=dist_t, body={
+        "customer_name": customer, "customer_phone": "9999999999",
+        "payment_mode": "cash",
+        "items": [{"barcode": "9780892132517", "qty": 1}],
+    })
+    bulk_bills.append(bill)
+code, bulk_result = call("POST", "/api/pos/invoices/collect", token=zone_t, body={
+    "invoice_ids": [bulk_bills[1]["invoice_id"], bulk_bills[0]["invoice_id"]],
+    "amount": 99999, "method": "cash",
+})
+check("combined collection rejects an overpayment", code == 400)
+code, bulk_result = call("POST", "/api/pos/invoices/collect", token=zone_t, body={
+    "invoice_ids": [bulk_bills[1]["invoice_id"], bulk_bills[0]["invoice_id"]],
+    "method": "cash",
+})
+check("zone leader collects several distributor bills at once", code == 200
+      and bulk_result["invoice_count"] == 2
+      and bulk_result["total_collected"] == sum(b["total"] for b in bulk_bills)
+      and bulk_result["balance_due"] == 0, bulk_result)
+for bill in bulk_bills:
+    call("DELETE", f"/api/pos/invoices/{bill['invoice_id']}", token=super_t)
+code, _ = call("GET", f"/api/pos/invoices/{bulk_bills[0]['invoice_id']}", token=super_t)
+check("bulk collected bills can be removed", code == 404)
+
 # A distributor bill is due to the zone at billing; its cash becomes remittable
 # only after the zone collects from the distributor.
 for billed in (led, dist_cash):

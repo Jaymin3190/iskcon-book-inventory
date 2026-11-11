@@ -120,6 +120,14 @@ class InvoicePaymentIn(BaseModel):
     note: Optional[str] = None
 
 
+class InvoiceBulkPaymentIn(BaseModel):
+    invoice_ids: list[int]
+    amount: Optional[float] = None
+    method: str = "cash"
+    reference: Optional[str] = None
+    note: Optional[str] = None
+
+
 class InvoiceEditItemIn(BaseModel):
     barcode: str
     qty: int
@@ -139,11 +147,13 @@ def list_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin", 
     ids = invoice_location_ids(db, user)
     sql = """SELECT i.*, l.code AS location_code, l.name AS location_name,
                     u.name AS cashier_name, u.role AS cashier_role,
+                    d.name AS distributor_name,
                     COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
                                WHERE p.invoice_id = i.id),0) AS amount_paid
              FROM invoices i
              JOIN locations l ON l.id = i.location_id
              LEFT JOIN users u ON u.id = i.cashier_id
+             LEFT JOIN users d ON d.id = i.distributor_id
              WHERE i.location_id IN ({})""".format(",".join("?" * len(ids)))
     params = list(ids)
     if user["role"] == "distributor":
@@ -670,6 +680,137 @@ def receive_invoice_payment(
         "amount_paid": new_paid,
         "balance_due": max(0, round(total - new_paid, 2)),
         "status": status,
+    }
+
+
+@router.post("/invoices/collect")
+def collect_invoice_payments(
+    data: InvoiceBulkPaymentIn,
+    db=Depends(get_db),
+    user=Depends(require_roles("super_admin", "zone_admin")),
+):
+    """Collect several distributor bills in one go.
+
+    The zone leader ticks the bills handed over by one distributor and records a
+    single collection. Leftover balances are always allocated oldest bill first,
+    so a part payment never leaves an older bill untouched.
+    """
+    invoice_ids = list(dict.fromkeys(data.invoice_ids or []))
+    if not invoice_ids:
+        raise HTTPException(400, "Select at least one bill to collect")
+    if data.method not in INVOICE_PAYMENT_METHODS:
+        raise HTTPException(400, f"Invalid payment method. Valid: {', '.join(INVOICE_PAYMENT_METHODS)}")
+
+    placeholders = ",".join("?" * len(invoice_ids))
+    rows = db.execute(
+        f"""SELECT i.*, u.name AS cashier_name, u.role AS cashier_role,
+                   d.name AS distributor_name,
+                   COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                              WHERE p.invoice_id = i.id),0) AS amount_paid
+              FROM invoices i
+              LEFT JOIN users u ON u.id = i.cashier_id
+              LEFT JOIN users d ON d.id = i.distributor_id
+             WHERE i.id IN ({placeholders})""",
+        invoice_ids,
+    ).fetchall()
+    found = {row["id"]: row for row in rows}
+    missing = [invoice_id for invoice_id in invoice_ids if invoice_id not in found]
+    if missing:
+        raise HTTPException(404, f"Invoice not found: {missing[0]}")
+
+    allowed = invoice_location_ids(db, user)
+    distributor_key = None
+    bills = []
+    for inv in sorted(rows, key=lambda row: (row["created_at"] or "", row["id"])):
+        if inv["location_id"] not in allowed:
+            raise HTTPException(403, "Forbidden")
+        if inv["razorpay_qr_code_id"] or inv["status"] in ("pending", "failed"):
+            raise HTTPException(
+                409,
+                f"{inv['invoice_number']} is a Razorpay bill and cannot take a manual payment",
+            )
+        key = inv["distributor_id"]
+        if key is None and inv["cashier_role"] == "distributor":
+            key = inv["cashier_id"]
+        if key is None:
+            raise HTTPException(400, f"{inv['invoice_number']} is not a distributor bill")
+        if distributor_key is None:
+            distributor_key = key
+        elif key != distributor_key:
+            raise HTTPException(400, "Select bills from one distributor at a time")
+        total = round(float(inv["total"] or 0), 2)
+        already_paid = round(float(inv["amount_paid"] or 0), 2)
+        balance = max(0, round(total - already_paid, 2))
+        if balance <= 0:
+            raise HTTPException(409, f"{inv['invoice_number']} is already fully paid")
+        bills.append({
+            "invoice": inv,
+            "total": total,
+            "already_paid": already_paid,
+            "balance": balance,
+        })
+
+    total_due = round(sum(bill["balance"] for bill in bills), 2)
+    amount = total_due if data.amount is None else round(float(data.amount), 2)
+    if amount <= 0:
+        raise HTTPException(400, "Payment amount must be positive")
+    if amount > total_due + 0.009:
+        raise HTTPException(400, f"Payment exceeds the outstanding total of {total_due:.2f}")
+
+    reference = (data.reference or "").strip() or None
+    note = (data.note or "").strip() or None
+    remaining = amount
+    allocations = []
+    try:
+        for bill in bills:
+            if remaining <= 0:
+                break
+            applied = round(min(bill["balance"], remaining), 2)
+            if applied <= 0:
+                continue
+            inv = bill["invoice"]
+            cur = db.execute(
+                """INSERT INTO invoice_payments
+                       (invoice_id, amount, method, reference, received_by, note)
+                   VALUES (?,?,?,?,?,?)""",
+                (inv["id"], applied, data.method, reference, user["id"], note),
+            )
+            new_paid = round(bill["already_paid"] + applied, 2)
+            status = invoice_status_for(bill["total"], new_paid)
+            db.execute("UPDATE invoices SET status = ? WHERE id = ?", (status, inv["id"]))
+            allocations.append({
+                "payment_id": cur.lastrowid,
+                "invoice_id": inv["id"],
+                "invoice_number": inv["invoice_number"],
+                "amount": applied,
+                "amount_paid": new_paid,
+                "balance_due": max(0, round(bill["total"] - new_paid, 2)),
+                "status": status,
+            })
+            remaining = round(remaining - applied, 2)
+        db.commit()
+    except sqlite3.Error:
+        db.rollback()
+        raise
+
+    for allocation in allocations:
+        log_audit(
+            db, user["id"], "INVOICE_PAYMENT", "invoices", allocation["invoice_id"],
+            f"{allocation['invoice_number']} received {allocation['amount']:.2f} "
+            f"{data.method} in a combined collection; balance "
+            f"{allocation['balance_due']:.2f}",
+            user["username"],
+        )
+
+    collected = round(sum(allocation["amount"] for allocation in allocations), 2)
+    return {
+        "ok": True,
+        "distributor_id": distributor_key,
+        "invoice_count": len(allocations),
+        "total_collected": collected,
+        "total_due_before": total_due,
+        "balance_due": max(0, round(total_due - collected, 2)),
+        "payments": allocations,
     }
 
 

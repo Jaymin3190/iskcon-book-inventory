@@ -2393,7 +2393,10 @@ async function invoiceList() {
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(invoiceStatusLabel(i))}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td><td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td><td>${Number(i.balance_due || 0) > 0 ? `<strong>&#8377;${Number(i.balance_due).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
         <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${canEditInvoice(i) ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${canReceiveInvoicePayment(i) ? `<button class="action" onclick="invoiceReceivePayment(${i.id})">Receive payment</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="event.stopPropagation(); invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="11" class="hint">No invoices yet.</td></tr>'}
-    </table></div>`);
+    </table></div>
+    ${hasAnyRole('super_admin', 'zone_admin') ? `<div class="toolbar" style="margin-top:14px">
+      <button class="primary" onclick="invoiceBulkCollect()">Collect from distributor</button>
+    </div>` : ''}`);
 }
 
 async function invoiceDetail(invoiceId) {
@@ -2533,6 +2536,207 @@ async function invoiceReceivePaymentSave(invoiceId) {
     invoiceDetail(invoiceId);
   } catch (e) {
     if (errorEl) errorEl.textContent = e.message;
+  }
+}
+
+let invoiceBulkState = null;
+
+function invoiceBulkKey(inv) {
+  if (inv.distributor_id != null) return Number(inv.distributor_id);
+  if (inv.cashier_role === 'distributor') return Number(inv.cashier_id);
+  return null;
+}
+
+function invoiceBulkBills() {
+  const s = invoiceBulkState;
+  if (!s) return [];
+  return s.invoices
+    .filter(inv => invoiceBulkKey(inv) === Number(s.distributorId))
+    .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')) || a.id - b.id);
+}
+
+function invoiceBulkTotals() {
+  if (!invoiceBulkState) return { selected: [], total: 0 };
+  const bills = invoiceBulkBills();
+  const selected = bills.filter(inv => invoiceBulkState.selected.has(Number(inv.id)));
+  const total = Math.round(selected.reduce((sum, inv) => sum + Number(inv.balance_due || 0), 0) * 100) / 100;
+  return { selected, total };
+}
+
+async function invoiceBulkCollect() {
+  let rows;
+  try { rows = await api('/api/pos/invoices'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  const invoices = rows.filter(inv => canReceiveInvoicePayment(inv) && invoiceBulkKey(inv) != null);
+  if (!invoices.length) {
+    toast('No distributor bills are waiting for collection', 'info');
+    return;
+  }
+  const distributors = new Map();
+  for (const inv of invoices) {
+    const id = invoiceBulkKey(inv);
+    if (!distributors.has(id)) {
+      distributors.set(id, inv.distributor_name || inv.cashier_name || `Distributor ${id}`);
+    }
+  }
+  invoiceBulkState = {
+    invoices,
+    distributors: [...distributors.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    distributorId: [...distributors.keys()][0],
+    selected: new Set(),
+  };
+  invoiceBulkSelectDistributor(invoiceBulkState.distributorId);
+}
+
+function invoiceBulkSelectDistributor(value) {
+  if (!invoiceBulkState) return;
+  invoiceBulkState.distributorId = Number(value);
+  invoiceBulkState.selected = new Set(invoiceBulkBills().map(inv => Number(inv.id)));
+  renderInvoiceBulkCollect();
+}
+
+function renderInvoiceBulkCollect() {
+  const s = invoiceBulkState;
+  if (!s) return;
+  const bills = invoiceBulkBills();
+  const { selected, total } = invoiceBulkTotals();
+  const options = s.distributors.map(d =>
+    `<option value="${d.id}" ${Number(s.distributorId) === Number(d.id) ? 'selected' : ''}>${esc(d.name)}</option>`
+  ).join('');
+  const rows = bills.map(inv => `<tr>
+      <td><input type="checkbox" data-bill="${inv.id}" ${s.selected.has(Number(inv.id)) ? 'checked' : ''} onchange="invoiceBulkToggle(${inv.id}, this.checked)"></td>
+      <td>${esc(inv.invoice_number)}</td>
+      <td>${esc(formatAuditTime(inv.created_at))}</td>
+      <td>${esc(inv.customer_name || '—')}</td>
+      <td>&#8377;${Number(inv.total).toFixed(2)}</td>
+      <td><strong>&#8377;${Number(inv.balance_due || 0).toFixed(2)}</strong></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="hint">No pending bills for this distributor.</td></tr>';
+  openModal(`<h3>Collect from distributor</h3>
+    <p class="hint">Tick every bill the distributor handed over. If the amount is less than the total, it is applied to the oldest bills first.</p>
+    <div class="form-row"><label>Distributor</label>
+      <select id="bulkDistributor" onchange="invoiceBulkSelectDistributor(this.value)">${options}</select>
+    </div>
+    <div class="table-scroll"><table>
+      <tr><th></th><th>Invoice</th><th>Date</th><th>Customer</th><th>Bill total</th><th>Outstanding</th></tr>
+      ${rows}
+    </table></div>
+    <div class="mini-stats">
+      <div class="mini-stat"><div class="num" id="bulkCount">${selected.length}</div><div class="lbl">Bills selected</div></div>
+      <div class="mini-stat"><div class="num" id="bulkTotal">&#8377;${total.toFixed(2)}</div><div class="lbl">Total outstanding</div></div>
+    </div>
+    <div class="form-row"><label>Amount collected (&#8377;)</label>
+      <input id="bulkAmount" type="number" min="0.01" step="0.01" value="${total.toFixed(2)}" readonly oninput="invoiceBulkSync()">
+      <span id="bulkAmountHint" class="hint">Collecting the full outstanding amount.</span>
+    </div>
+    <div class="form-row"><label><input type="checkbox" id="bulkPartial" onchange="invoiceBulkPartialToggle()"> Collect a different amount</label></div>
+    <div class="form-row"><label>Method</label>
+      <select id="bulkMethod">
+        <option value="cash">Cash</option>
+        <option value="upi">UPI</option>
+        <option value="card">Card</option>
+      </select>
+    </div>
+    <div class="form-row"><label><input type="checkbox" id="bulkDetails" onchange="document.getElementById('bulkDetailsRows').hidden = !this.checked"> Add reference or note</label></div>
+    <div id="bulkDetailsRows" hidden>
+      <div class="form-row"><label>Reference</label><input id="bulkRef"></div>
+      <div class="form-row"><label>Note</label><input id="bulkNote"></div>
+    </div>
+    <p id="bulkError" class="error"></p>
+    <div class="toolbar">
+      <button id="bulkSubmit" class="primary" ${selected.length ? '' : 'disabled'} onclick="invoiceBulkCollectSave()">Collect &#8377;${total.toFixed(2)}</button>
+      <button class="action" onclick="invoiceList()">Cancel</button>
+    </div>`);
+}
+
+function invoiceBulkToggle(invoiceId, checked) {
+  if (!invoiceBulkState) return;
+  const id = Number(invoiceId);
+  if (checked) invoiceBulkState.selected.add(id);
+  else invoiceBulkState.selected.delete(id);
+  const partial = document.getElementById('bulkPartial')?.checked;
+  const { selected, total } = invoiceBulkTotals();
+  const count = document.getElementById('bulkCount');
+  if (count) count.textContent = String(selected.length);
+  const totalEl = document.getElementById('bulkTotal');
+  if (totalEl) totalEl.innerHTML = '&#8377;' + total.toFixed(2);
+  const amount = document.getElementById('bulkAmount');
+  if (amount && !partial) amount.value = total.toFixed(2);
+  invoiceBulkSync();
+}
+
+function invoiceBulkPartialToggle() {
+  const input = document.getElementById('bulkAmount');
+  const checked = document.getElementById('bulkPartial').checked;
+  if (!input) return;
+  input.readOnly = !checked;
+  if (checked) {
+    input.value = '';
+    input.focus();
+  } else {
+    input.value = invoiceBulkTotals().total.toFixed(2);
+  }
+  invoiceBulkSync();
+}
+
+function invoiceBulkSync() {
+  const input = document.getElementById('bulkAmount');
+  const { selected, total } = invoiceBulkTotals();
+  const amount = Number(input?.value);
+  const hasAmount = Number.isFinite(amount) && amount > 0;
+  const withinTotal = hasAmount && amount <= total + 0.009;
+  const valid = selected.length > 0 && withinTotal;
+  const hint = document.getElementById('bulkAmountHint');
+  const button = document.getElementById('bulkSubmit');
+  if (hint) {
+    if (!selected.length) hint.textContent = 'Tick at least one bill to collect.';
+    else if (!hasAmount) hint.textContent = 'Enter an amount greater than zero.';
+    else if (!withinTotal) hint.textContent = `The selected bills total \u20b9${total.toFixed(2)}.`;
+    else if (amount + 0.009 < total) hint.textContent = `Part collection. \u20b9${(total - amount).toFixed(2)} will stay due.`;
+    else hint.textContent = 'Collecting the full outstanding amount.';
+  }
+  if (button) {
+    button.disabled = !valid;
+    button.textContent = valid ? `Collect \u20b9${amount.toFixed(2)}` : 'Collect';
+  }
+}
+
+async function invoiceBulkCollectSave() {
+  const s = invoiceBulkState;
+  if (!s) return;
+  const { selected, total } = invoiceBulkTotals();
+  const errorEl = document.getElementById('bulkError');
+  if (!selected.length) {
+    if (errorEl) errorEl.textContent = 'Tick at least one bill to collect';
+    return;
+  }
+  const amount = Number(document.getElementById('bulkAmount').value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    if (errorEl) errorEl.textContent = 'Enter an amount greater than zero';
+    return;
+  }
+  if (amount > total + 0.009) {
+    if (errorEl) errorEl.textContent = `The selected bills total \u20b9${total.toFixed(2)}`;
+    return;
+  }
+  const submit = document.getElementById('bulkSubmit');
+  if (submit) submit.disabled = true;
+  try {
+    const res = await api('/api/pos/invoices/collect', { method: 'POST', body: {
+      invoice_ids: selected.map(inv => inv.id),
+      amount,
+      method: document.getElementById('bulkMethod').value,
+      reference: document.getElementById('bulkRef')?.value.trim() || '',
+      note: document.getElementById('bulkNote')?.value.trim() || '',
+    }});
+    const remaining = Number(res.balance_due || 0);
+    toast(`Collected \u20b9${Number(res.total_collected).toFixed(2)} across ${res.invoice_count} bill${res.invoice_count === 1 ? '' : 's'}${remaining > 0 ? `; \u20b9${remaining.toFixed(2)} still due` : ''}`, 'success');
+    invoiceBulkState = null;
+    invoiceList();
+  } catch (e) {
+    if (errorEl) errorEl.textContent = e.message;
+    if (submit) submit.disabled = false;
   }
 }
 
