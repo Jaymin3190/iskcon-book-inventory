@@ -2697,30 +2697,38 @@ async function payments() {
   const selfOnly = !templeSide;
   const total = rows.reduce((a, r) => a + Number(r.amount || 0), 0);
   const pendingTotal = pendingZones.reduce((a, z) => a + Number(z.amount || 0), 0);
+  const onlineTotal = pendingZones.reduce((a, z) => a + Number(z.online_received || 0), 0);
+  const cashCollectedTotal = pendingZones.reduce((a, z) => a + Number(z.cash_collected || 0), 0);
+  const handedOverTotal = pendingZones.reduce((a, z) => a + Number(z.cash_remitted || 0), 0);
+  const collectedTotal = pendingZones.reduce((a, z) => a + Number(z.total_collected || 0), 0);
+  const money = value => '&#8377;' + Number(value || 0).toFixed(2);
   document.getElementById('content').innerHTML = `
     <div class="stats">
       <div class="stat"><div class="num">${rows.length}</div><div class="lbl">Cash handovers</div></div>
       <div class="stat"><div class="num">&#8377;${total.toFixed(2)}</div><div class="lbl">Total cash received</div></div>
-      ${templeSide ? `<div class="stat"><div class="num">&#8377;${pendingTotal.toFixed(2)}</div><div class="lbl">To collect from zones</div></div>` : ''}
+      ${templeSide ? `<div class="stat"><div class="num">${money(pendingTotal)}</div><div class="lbl">To collect from zones</div></div>
+      <div class="stat"><div class="num">${money(onlineTotal)}</div><div class="lbl">Online received</div></div>` : ''}
     </div>
     ${templeSide ? `<div class="card">
       <h2>Collect from zones</h2>
-      <p class="hint">Cash the zones have collected from customers and distributors but not yet handed over to the temple. Collect it here: the zone leader's receipts are ticked off in the confirmation.</p>
-      ${pendingZones.length ? `<div class="table-scroll"><table>
-        <tr><th>Zone</th><th>Zone leader</th><th>Pending bills</th><th>To collect</th><th></th></tr>
+      <p class="hint">Tally each zone: cash collected = handed over + pending cash. Online received is UPI, card and Razorpay money that reached the temple account directly. Pending cash is what the temple still has to collect from the zone leader.</p>
+      ${pendingZones.length ? `<div class="table-scroll"><table class="tally-table">
+        <tr><th>Zone</th><th>Cash collected</th><th>Handed over</th><th>Pending cash</th><th>Online received</th><th>Total collected</th><th></th></tr>
         ${pendingZones.map(z => `<tr>
-          <td>${esc(z.zone_name)}</td>
-          <td>${z.zone_admins.length
+          <td>${esc(z.zone_name)}<span class="cart-book-barcode">${z.zone_admins.length
             ? esc(z.zone_admins.map(a => a.name).join(', '))
-            : '<span class="hint">No active zone leader</span>'}</td>
-          <td>${z.bills}</td>
-          <td><strong>&#8377;${Number(z.amount).toFixed(2)}</strong></td>
-          <td>${z.zone_admins.length
+            : 'No active zone leader'}</span></td>
+          <td>${money(z.cash_collected)}</td>
+          <td>${money(z.cash_remitted)}</td>
+          <td>${Number(z.amount) > 0 ? `<strong>${money(z.amount)}</strong>` : money(0)}</td>
+          <td>${money(z.online_received)}</td>
+          <td>${money(z.total_collected)}</td>
+          <td>${Number(z.amount) > 0 && z.zone_admins.length
             ? `<button class="primary" onclick="paymentForm(${z.zone_admins[0].id})">Collect</button>`
             : ''}</td>
         </tr>`).join('')}
-        <tr><td colspan="3" class="hint">Total pending</td><td><strong>&#8377;${pendingTotal.toFixed(2)}</strong></td><td></td></tr>
-      </table></div>` : '<p class="hint">Nothing is pending. Every zone has handed over the cash it collected.</p>'}
+        <tr><td class="hint">Total</td><td>${money(cashCollectedTotal)}</td><td>${money(handedOverTotal)}</td><td><strong>${money(pendingTotal)}</strong></td><td>${money(onlineTotal)}</td><td>${money(collectedTotal)}</td><td></td></tr>
+      </table></div>` : '<p class="hint">No zone collections recorded yet.</p>'}
     </div>` : ''}
     <div class="card">
       <h2>Payment in</h2>

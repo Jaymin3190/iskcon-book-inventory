@@ -97,6 +97,8 @@ def _zone_cash_rows(db, zone_user):
                               WHERE p.invoice_id = i.id),0) AS amount_paid,
                    COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
                               WHERE p.invoice_id = i.id AND p.method = 'cash'),0) AS cash_collected,
+                   COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                              WHERE p.invoice_id = i.id AND p.method != 'cash'),0) AS online_collected,
                    COALESCE((SELECT SUM(c.amount) FROM cash_submission_items c
                               WHERE c.invoice_id = i.id),0) AS cash_remitted
               FROM invoices i
@@ -124,6 +126,7 @@ def _cash_item(row):
         "balance_due": max(0, round(total - paid, 2)),
         "cash_collected": collected,
         "cash_remitted": remitted,
+        "online_collected": round(float(row["online_collected"] or 0), 2),
         "remittable": remittable,
         "location_name": row["location_name"],
         "cashier_id": row["cashier_id"],
@@ -394,9 +397,30 @@ def pending_summary(db=Depends(get_db), user=Depends(require_roles("temple", "su
 
     summary = []
     for zone in zones:
-        pending = _pending_items(db, zone["id"])
+        rows = _zone_cash_rows(db, {"zone_id": zone["id"]})
+        pending = [
+            _cash_item(row)
+            for row in rows
+            if row["status"] not in ("pending", "failed")
+            and _receipt_error(row, zone["id"]) is None
+        ]
         amount = round(sum(item["remittable"] for item in pending), 2)
-        if amount <= 0:
+
+        # Tally figures for the whole zone team. The temple's own counter bills
+        # at the same location are left out so they are not counted twice.
+        cash_collected = 0.0
+        cash_remitted = 0.0
+        online_received = 0.0
+        for row in rows:
+            if row["cashier_role"] not in ("zone_admin", "distributor"):
+                continue
+            if row["status"] in ("pending", "failed"):
+                continue
+            cash_collected += float(row["cash_collected"] or 0)
+            cash_remitted += float(row["cash_remitted"] or 0)
+            online_received += float(row["online_collected"] or 0)
+        cash_collected = round(cash_collected, 2)
+        if cash_collected <= 0 and online_received <= 0:
             continue
         summary.append({
             "zone_id": zone["id"],
@@ -404,6 +428,10 @@ def pending_summary(db=Depends(get_db), user=Depends(require_roles("temple", "su
             "zone_code": zone["code"],
             "amount": amount,
             "bills": len(pending),
+            "cash_collected": cash_collected,
+            "cash_remitted": round(cash_remitted, 2),
+            "online_received": round(online_received, 2),
+            "total_collected": round(cash_collected + online_received, 2),
             "zone_admins": admins_by_zone.get(zone["id"], []),
         })
     return summary

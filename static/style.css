@@ -318,6 +318,20 @@ table tr[hidden] { display: none !important; }
   .zone-table th:nth-child(9) { width: 11%; }
 }
 
+@media (min-width: 601px) {
+  .table-scroll > table.tally-table { width: 100%; table-layout: fixed; }
+  .tally-table th:nth-child(1) { width: 22%; }
+  .tally-table th:nth-child(2) { width: 14%; }
+  .tally-table th:nth-child(3) { width: 13%; }
+  .tally-table th:nth-child(4) { width: 13%; }
+  .tally-table th:nth-child(5) { width: 14%; }
+  .tally-table th:nth-child(6) { width: 13%; }
+  .tally-table th:nth-child(7) { width: 11%; }
+}
+.tally-table th, .tally-table td { text-align: right; }
+.tally-table th:first-child, .tally-table td:first-child { text-align: left; }
+.tally-table th:last-child, .tally-table td:last-child { text-align: center; }
+
 .daily-zone-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .daily-zone-head h2 { margin: 0; }
 .daily-zone-table th, .daily-zone-table td { text-align: right; }

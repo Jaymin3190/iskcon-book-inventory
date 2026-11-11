@@ -493,9 +493,16 @@ check("pending receipts expose cashier identity for the distributor filter", any
 ), pending)
 
 code, summary = call("GET", "/api/payments/pending-summary", token=temple_t)
+zone_summary = next((z for z in summary if z["zone_id"] == 2), {})
 check("temple sees how much it has to collect from each zone", code == 200
-      and any(z["zone_id"] == 2 and z["amount"] == 1300.0 and z["bills"] == 4 for z in summary),
-      summary)
+      and zone_summary.get("amount") == 1300.0 and zone_summary.get("bills") == 4,
+      zone_summary)
+check("temple summary tallies cash collected and handed over", code == 200
+      and zone_summary.get("cash_collected") == 1300.0
+      and zone_summary.get("cash_remitted") == 0.0, zone_summary)
+check("temple summary starts with no online money in the zone", code == 200
+      and zone_summary.get("online_received") == 0
+      and zone_summary.get("total_collected") == 1300.0, zone_summary)
 code, super_summary = call("GET", "/api/payments/pending-summary", token=super_t)
 check("super admin sees the same temple collection summary", code == 200
       and any(z["zone_id"] == 2 and z["amount"] == 1300.0 for z in super_summary), super_summary)
@@ -590,8 +597,11 @@ check("a receipt cannot be handed over twice", code == 400)
 code, pending_after = call("GET", f"/api/payments/pending?user_id={zone_user_id}", token=temple_t)
 check("handed-over receipts leave the pending list", code == 200 and not pending_after, pending_after)
 code, summary_after = call("GET", "/api/payments/pending-summary", token=temple_t)
-check("temple collection summary clears once the zone hands over its cash", code == 200
-      and all(z["zone_id"] != 2 for z in summary_after), summary_after)
+zone_after = next((z for z in summary_after if z["zone_id"] == 2), {})
+check("temple tally shows no cash left to collect after handover", code == 200
+      and zone_after.get("amount") == 0.0
+      and zone_after.get("cash_collected") == 1750.0
+      and zone_after.get("cash_remitted") == 1750.0, zone_after)
 
 code, zone_payments = call("GET", "/api/payments", token=zone_t)
 check("zone admin sees the temple confirmation", code == 200
@@ -1157,6 +1167,38 @@ check("cash receipt shows the invoice received and amount due", code == 200
       and credit_handover_detail["items"][0]["amount_paid"] == 50
       and credit_handover_detail["items"][0]["balance_due"] == credit["total"] - 50,
       credit_handover_detail)
+
+# --- temple tally keeps online money separate from pending cash ---
+code, tally_before = call("GET", "/api/payments/pending-summary", token=temple_t)
+zone_before_tally = next((z for z in tally_before if z["zone_id"] == 2), {})
+code, upi_tally = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Online Tally", "customer_phone": "9999999999",
+    "payment_mode": "upi", "items": [{"barcode": credit_book["barcode"], "qty": 1}],
+})
+check("zone UPI bill records online money", code == 200
+      and upi_tally["status"] == "paid", upi_tally)
+upi_tally_total = round(float(upi_tally.get("total") or 0), 2)
+
+_, tally_with_upi = call("GET", "/api/payments/pending-summary", token=temple_t)
+zone_with_upi = next((z for z in tally_with_upi if z["zone_id"] == 2), {})
+check("temple tally keeps online money separate from pending cash", code == 200
+      and zone_with_upi.get("online_received")
+      == round(zone_before_tally.get("online_received", 0) + upi_tally_total, 2)
+      and zone_with_upi.get("cash_collected") == zone_before_tally.get("cash_collected")
+      and zone_with_upi.get("amount") == zone_before_tally.get("amount"), zone_with_upi)
+check("temple tally adds online money to the zone total", code == 200
+      and zone_with_upi.get("total_collected")
+      == round(zone_with_upi.get("cash_collected", 0) + zone_with_upi.get("online_received", 0), 2),
+      zone_with_upi)
+
+code, _ = call("DELETE", f"/api/pos/invoices/{upi_tally['invoice_id']}", token=super_t)
+check("online tally bill can be removed", code == 200)
+_, tally_after_upi = call("GET", "/api/payments/pending-summary", token=temple_t)
+zone_after_upi = next((z for z in tally_after_upi if z["zone_id"] == 2), {})
+check("temple tally drops the online amount after the bill is removed", code == 200
+      and zone_after_upi.get("online_received") == zone_before_tally.get("online_received")
+      and zone_after_upi.get("total_collected") == zone_before_tally.get("total_collected"),
+      zone_after_upi)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
