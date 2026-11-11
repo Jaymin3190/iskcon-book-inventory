@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Book stack">
+  <rect width="64" height="64" rx="14" fill="#8a5a1f"/>
+  <rect x="10" y="43" width="44" height="11" rx="3" fill="#f6efe1"/>
+  <rect x="10" y="43" width="7" height="11" rx="3" fill="#c9a77b"/>
+  <rect x="13" y="30" width="41" height="11" rx="3" fill="#f1e2c8"/>
+  <rect x="13" y="30" width="7" height="11" rx="3" fill="#b98a52"/>
+  <rect x="10" y="17" width="44" height="11" rx="3" fill="#f6efe1"/>
+  <rect x="10" y="17" width="7" height="11" rx="3" fill="#c9a77b"/>
+</svg>
