@@ -367,12 +367,12 @@ def pending_receipts(user_id: int, db=Depends(get_db), user=Depends(require_role
 
 
 @router.get("/pending-summary")
-def pending_summary(db=Depends(get_db), user=Depends(require_roles("temple", "super_admin"))):
-    """How much the temple still has to collect from each zone.
+def pending_summary(db=Depends(get_db), user=Depends(require_roles("temple", "super_admin", "zone_admin"))):
+    """How much cash each zone has collected and not yet handed over.
 
-    The figure is the cash the zone team has collected from customers and
-    distributors but has not handed over to the temple yet. It is shown only to
-    the temple side; zone leaders see their own pending receipts instead.
+    The temple sees every zone it receives cash from; a zone leader sees only
+    their own zone. Online money (UPI, card, Razorpay) is reported next to the
+    pending cash so the two can be tallied against the temple account.
     """
     ids = sorted(i for i in payment_zone_ids(db, user) if i is not None)
     if not ids:

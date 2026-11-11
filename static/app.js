@@ -2689,9 +2689,10 @@ async function invoiceDelete(invoiceId, view, ...args) {
 /* ---- payment in (cash handover to the temple) ---- */
 async function payments() {
   const templeSide = hasAnyRole('temple', 'super_admin');
+  const summarySide = templeSide || hasAnyRole('zone_admin');
   const [rows, pendingZones] = await Promise.all([
     api('/api/payments'),
-    templeSide ? api('/api/payments/pending-summary') : Promise.resolve([]),
+    summarySide ? api('/api/payments/pending-summary') : Promise.resolve([]),
   ]);
   const canRecord = hasAnyRole('super_admin', 'temple', 'zone_admin');
   const selfOnly = !templeSide;
@@ -2702,16 +2703,23 @@ async function payments() {
   const handedOverTotal = pendingZones.reduce((a, z) => a + Number(z.cash_remitted || 0), 0);
   const collectedTotal = pendingZones.reduce((a, z) => a + Number(z.total_collected || 0), 0);
   const money = value => '&#8377;' + Number(value || 0).toFixed(2);
+  const tallyAction = z => {
+    if (!(Number(z.amount) > 0)) return '';
+    if (!templeSide) return '<button class="primary" onclick="paymentForm()">Hand over</button>';
+    return z.zone_admins.length
+      ? `<button class="primary" onclick="paymentForm(${z.zone_admins[0].id})">Collect</button>`
+      : '';
+  };
   document.getElementById('content').innerHTML = `
     <div class="stats">
       <div class="stat"><div class="num">${rows.length}</div><div class="lbl">Cash handovers</div></div>
       <div class="stat"><div class="num">&#8377;${total.toFixed(2)}</div><div class="lbl">Total cash received</div></div>
-      ${templeSide ? `<div class="stat"><div class="num">${money(pendingTotal)}</div><div class="lbl">To collect from zones</div></div>
+      ${summarySide ? `<div class="stat"><div class="num">${money(pendingTotal)}</div><div class="lbl">${templeSide ? 'To collect from zones' : 'Pending cash'}</div></div>
       <div class="stat"><div class="num">${money(onlineTotal)}</div><div class="lbl">Online received</div></div>` : ''}
     </div>
-    ${templeSide ? `<div class="card">
-      <h2>Collect from zones</h2>
-      <p class="hint">Tally each zone: cash collected = handed over + pending cash. Online received is UPI, card and Razorpay money that reached the temple account directly. Pending cash is what the temple still has to collect from the zone leader.</p>
+    ${summarySide ? `<div class="card">
+      <h2>${templeSide ? 'Collect from zones' : 'Your zone cash tally'}</h2>
+      <p class="hint">Tally ${templeSide ? 'each zone' : 'your zone'}: cash collected = handed over + pending cash. Online received is UPI, card and Razorpay money that reached the temple account directly. ${templeSide ? 'Pending cash is what the temple still has to collect from the zone leader.' : 'Pending cash is what you still have to hand over to the temple.'}</p>
       ${pendingZones.length ? `<div class="table-scroll"><table class="tally-table">
         <tr><th>Zone</th><th>Cash collected</th><th>Handed over</th><th>Pending cash</th><th>Online received</th><th>Total collected</th><th></th></tr>
         ${pendingZones.map(z => `<tr>
@@ -2723,9 +2731,7 @@ async function payments() {
           <td>${Number(z.amount) > 0 ? `<strong>${money(z.amount)}</strong>` : money(0)}</td>
           <td>${money(z.online_received)}</td>
           <td>${money(z.total_collected)}</td>
-          <td>${Number(z.amount) > 0 && z.zone_admins.length
-            ? `<button class="primary" onclick="paymentForm(${z.zone_admins[0].id})">Collect</button>`
-            : ''}</td>
+          <td>${tallyAction(z)}</td>
         </tr>`).join('')}
         <tr><td class="hint">Total</td><td>${money(cashCollectedTotal)}</td><td>${money(handedOverTotal)}</td><td><strong>${money(pendingTotal)}</strong></td><td>${money(onlineTotal)}</td><td>${money(collectedTotal)}</td><td></td></tr>
       </table></div>` : '<p class="hint">No zone collections recorded yet.</p>'}

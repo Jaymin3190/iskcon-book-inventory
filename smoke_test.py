@@ -510,10 +510,16 @@ check("temple summary names the zone leader", any(
     z["zone_id"] == 2 and any(a["username"] == "leader-temple-zone" for a in z["zone_admins"])
     for z in summary
 ), summary)
-code, _ = call("GET", "/api/payments/pending-summary", token=zone_t)
-check("zone leader cannot see the temple collection summary", code == 403)
+code, zone_summary_own = call("GET", "/api/payments/pending-summary", token=zone_t)
+check("zone leader sees their own zone's tally", code == 200
+      and [z["zone_id"] for z in zone_summary_own] == [2]
+      and zone_summary_own[0]["amount"] == 1300.0
+      and zone_summary_own[0]["cash_collected"] == 1300.0, zone_summary_own)
+code, other_zone_summary = call("GET", "/api/payments/pending-summary", token=other_zone_t)
+check("another zone leader never sees this zone's tally", code == 200
+      and all(z["zone_id"] != 2 for z in other_zone_summary), other_zone_summary)
 code, _ = call("GET", "/api/payments/pending-summary", token=dist_t)
-check("distributor cannot see the temple collection summary", code == 403)
+check("distributor cannot see the zone tally", code == 403)
 
 zone_team_numbers = [zone_inv["invoice_number"], zone_inv3["invoice_number"],
                      dist_cash["invoice_number"], led["invoice_number"]]
