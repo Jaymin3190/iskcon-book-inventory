@@ -506,6 +506,15 @@ check("temple summary starts with no online money in the zone", code == 200
 code, super_summary = call("GET", "/api/payments/pending-summary", token=super_t)
 check("super admin sees the same temple collection summary", code == 200
       and any(z["zone_id"] == 2 and z["amount"] == 1300.0 for z in super_summary), super_summary)
+code, zone_reports = call("GET", "/api/reports/zones", token=super_t)
+zone_row = next((z for z in zone_reports if z["id"] == 2), {})
+check("dashboard zone report shows the temple's pending cash", code == 200
+      and zone_row.get("pending_cash") == 1300.0, zone_row)
+code, dist_reports = call("GET", "/api/reports/distributors?zone_id=2", token=super_t)
+dist_row = next((d for d in dist_reports if d["username"] == "distributor"), {})
+dist_pending = sum(p["amount"] for p in pending if p.get("cashier_id") == dist_me["user"]["id"])
+check("dashboard distributor report shows cash still to hand to the temple", code == 200
+      and dist_row.get("pending_to_temple") == dist_pending, dist_row)
 check("temple summary names the zone leader", any(
     z["zone_id"] == 2 and any(a["username"] == "leader-temple-zone" for a in z["zone_admins"])
     for z in summary

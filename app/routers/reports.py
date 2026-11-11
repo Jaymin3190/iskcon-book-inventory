@@ -25,6 +25,42 @@ def _with_outstanding(rows):
     return result
 
 
+def _pending_cash_to_temple(db, zone_id, distributor_id=None):
+    """Cash the zone team collected from customers but has not handed to the temple.
+
+    Mirrors the Payment In tally: cash received on bills raised by the zone team
+    (the zone admin or a distributor of that zone), minus handovers already
+    recorded. Customer dues are reported separately as ``outstanding``.
+    """
+    if zone_id is None:
+        return 0.0
+    ids = zone_location_ids(db, zone_id)
+    if not ids:
+        return 0.0
+    filters = ["i.location_id IN ({})".format(",".join("?" * len(ids)))]
+    params = list(ids)
+    if distributor_id is not None:
+        filters.append(
+            "(i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))"
+        )
+        params.extend([distributor_id, distributor_id])
+    row = db.execute(
+        f"""SELECT COALESCE(SUM(CASE WHEN paid > remitted
+                                   THEN ROUND(paid - remitted, 2) ELSE 0 END),0) AS pending
+              FROM (SELECT COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
+                                      WHERE p.invoice_id = i.id AND p.method = 'cash'),0) AS paid,
+                           COALESCE((SELECT SUM(c.amount) FROM cash_submission_items c
+                                      WHERE c.invoice_id = i.id),0) AS remitted
+                      FROM invoices i
+                      JOIN users u ON u.id = i.cashier_id
+                     WHERE {' AND '.join(filters)}
+                       AND u.role IN ('zone_admin','distributor')
+                       AND u.zone_id = ?)""",
+        params + [zone_id],
+    ).fetchone()
+    return round(float(row["pending"] or 0), 2)
+
+
 @router.get("/api/reports/sales")
 def sales_report(frm: str = None, to: str = None, location_id: int = None, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "temple"))):
     ids = invoice_location_ids(db, user)
@@ -281,7 +317,10 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
              LEFT JOIN sold_agg sa ON sa.root_id = l.id
              WHERE l.type = 'zone' AND l.id IN ({})
              ORDER BY l.name""".format(",".join("?" * len(ids)))
-    return [dict(r) for r in db.execute(sql, list(ids)).fetchall()]
+    rows = [dict(r) for r in db.execute(sql, list(ids)).fetchall()]
+    for row in rows:
+        row["pending_cash"] = _pending_cash_to_temple(db, row["id"])
+    return rows
 
 
 @router.get("/api/reports/zones/{zone_id}/invoices")
@@ -374,6 +413,7 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
         data["outstanding"] = max(
             0, round(float(data["revenue"] or 0) - float(data["collected"] or 0), 2)
         )
+        data["pending_to_temple"] = _pending_cash_to_temple(db, data["zone_id"], data["id"])
         rows.append(data)
     return rows
 
@@ -450,6 +490,7 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
         0,
         round(float(summary_data["revenue"] or 0) - float(summary_data["collected"] or 0), 2),
     )
+    summary_data["pending_to_temple"] = _pending_cash_to_temple(db, row["zone_id"], user_id)
     invoice_rows = []
     for invoice in invoices:
         data = dict(invoice)

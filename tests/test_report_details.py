@@ -152,6 +152,55 @@ class ReportDetailsTests(unittest.TestCase):
         self.assertEqual(details["transfer_count"], 2)
         self.assertEqual(details["total_units"], 15)
 
+    def test_pending_to_temple_is_cash_collected_minus_handed_over(self):
+        self.db.execute(
+            """INSERT INTO users (id, username, password_hash, name, role, zone_id)
+               VALUES (2, 'zone-a-admin', 'not-used', 'Zone A Admin', 'zone_admin', 2)"""
+        )
+        self.db.execute(
+            """INSERT INTO users (id, username, password_hash, name, role, zone_id)
+               VALUES (6, 'temple-user', 'not-used', 'Temple User', 'temple', NULL)"""
+        )
+        self.db.executemany(
+            """INSERT INTO invoices
+                   (id, invoice_number, location_id, payment_mode, subtotal, discount, total,
+                    status, cashier_id, distributor_id)
+               VALUES (?, ?, 2, ?, ?, 0, ?, 'paid', ?, ?)""",
+            [
+                (5, "INV-CASH", "cash", 1000, 1000, 1, 1),
+                (6, "INV-UPI", "upi", 500, 500, 1, 1),
+                (7, "INV-TEMPLE", "cash", 700, 700, 6, None),
+            ],
+        )
+        self.db.executemany(
+            """INSERT INTO invoice_payments (invoice_id, amount, method)
+               VALUES (?, ?, ?)""",
+            [(5, 1000, "cash"), (6, 500, "upi"), (7, 700, "cash")],
+        )
+        self.db.execute(
+            """INSERT INTO cash_submissions
+                   (id, receipt_number, zone_id, submitted_by, recorded_by, amount, invoice_count)
+               VALUES (1, 'RCV-1', 2, 1, 1, 300, 1)"""
+        )
+        self.db.execute(
+            """INSERT INTO cash_submission_items
+                   (submission_id, invoice_id, invoice_number, amount)
+               VALUES (1, 5, 'INV-CASH', 300)"""
+        )
+        self.db.commit()
+
+        distributors = {row["id"]: row for row in distributors_report(db=self.db, user=self.super_admin)}
+        details = distributor_details(1, db=self.db, user=self.super_admin)
+        zones = {row["id"]: row for row in zone_overview(db=self.db, user=self.super_admin)}
+
+        # ₹1000 cash collected on INV-CASH, ₹300 already handed over, UPI and
+        # temple-billed cash excluded.
+        self.assertEqual(distributors[1]["pending_to_temple"], 700.0)
+        self.assertEqual(details["summary"]["pending_to_temple"], 700.0)
+        self.assertEqual(zones[2]["pending_cash"], 700.0)
+        # A distributor without a zone never owes a zone handover.
+        self.assertEqual(distributors[5]["pending_to_temple"], 0.0)
+
     def test_godown_sale_is_attributed_to_selected_distributor_and_zone(self):
         distributors = distributors_report(db=self.db, user=self.super_admin)
         details = distributor_details(1, db=self.db, user=self.super_admin)

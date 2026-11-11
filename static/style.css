@@ -306,18 +306,6 @@ table tr[hidden] { display: none !important; }
   .audit-table th:nth-child(4) { width: 14%; }
   .audit-table .audit-tag { white-space: normal; }
 }
-@media (min-width: 601px) {
-  .table-scroll > table.zone-table { width: 100%; table-layout: fixed; }
-  .zone-table th:nth-child(1) { width: 19%; }
-  .zone-table th:nth-child(2) { width: 9%; }
-  .zone-table th:nth-child(3) { width: 10%; }
-  .zone-table th:nth-child(4) { width: 15%; }
-  .zone-table th:nth-child(5) { width: 6%; }
-  .zone-table th:nth-child(6) { width: 11%; }
-  .zone-table th:nth-child(7) { width: 10%; }
-  .zone-table th:nth-child(8) { width: 9%; }
-  .zone-table th:nth-child(9) { width: 11%; }
-}
 
 @media (min-width: 601px) {
   .table-scroll > table.tally-table { width: 100%; table-layout: fixed; }

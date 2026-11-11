@@ -348,7 +348,7 @@ async function dashboard() {
       <h2>Zone overview</h2>
       <p class="hint">Stock and sales for every zone. Select a zone to see its distributors and their bills.</p>
       <table class="zone-table">
-        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Collected</th><th>Outstanding</th><th>Cash</th><th>UPI</th><th>Razorpay</th></tr>
+        <tr><th>Zone</th><th>Stock units</th><th>Stock value</th><th>Distributors</th><th>Bills</th><th>Revenue</th><th>Collected</th><th>Outstanding</th><th>Pending to temple</th><th>Cash</th><th>UPI</th><th>Razorpay</th></tr>
         ${zones.map(z => `<tr class="zone-row" onclick="zoneDetails(${z.id})">
           <td><strong>${esc(z.name)}</strong><span class="cart-book-barcode">${esc(z.code)}</span></td>
           <td>${z.stock_units}</td>
@@ -358,10 +358,11 @@ async function dashboard() {
           <td>&#8377;${Number(z.revenue || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.collected || 0).toFixed(2)}</td>
           <td>${Number(z.outstanding || 0) > 0 ? `<strong>&#8377;${Number(z.outstanding).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
+          <td>${Number(z.pending_cash || 0) > 0 ? `<strong>&#8377;${Number(z.pending_cash).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
           <td>&#8377;${Number(z.cash_total || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.upi_total || 0).toFixed(2)}</td>
           <td>&#8377;${Number(z.razorpay_total || 0).toFixed(2)}</td>
-        </tr>`).join('') || '<tr><td colspan="11" class="hint">No zones found.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="12" class="hint">No zones found.</td></tr>'}
       </table>
     </div>` : '';
   document.getElementById('content').innerHTML = `
@@ -629,6 +630,7 @@ async function zoneDetails(zoneId) {
       ${miniStat('Zone revenue', '&#8377;' + Number(z.revenue || 0).toFixed(2))}
       ${miniStat('Collected', '&#8377;' + Number(z.collected || 0).toFixed(2))}
       ${miniStat('Outstanding', '&#8377;' + Number(z.outstanding || 0).toFixed(2))}
+      ${miniStat('Pending to temple', '&#8377;' + Number(z.pending_cash || 0).toFixed(2))}
       ${miniStat('Cash', '&#8377;' + Number(z.cash_total || 0).toFixed(2))}
       ${miniStat('UPI', '&#8377;' + Number(z.upi_total || 0).toFixed(2))}
       ${miniStat('Razorpay', '&#8377;' + Number(z.razorpay_total || 0).toFixed(2))}
@@ -636,9 +638,10 @@ async function zoneDetails(zoneId) {
       ${miniStat('Books sold', z.books_sold ?? 0)}
       ${miniStat('Stock value', '&#8377;' + Number(z.stock_value || 0).toFixed(0))}
     </div>
+    <p class="hint">Outstanding is what customers still owe the zone. Pending to temple is cash the zone collected but has not handed over yet &mdash; that is the amount collected from here in Payment In.</p>
     <h4>Distributors</h4>
     <table>
-      <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th>Credit</th><th>Revenue</th><th>Collected</th><th>Outstanding</th><th>Last sale</th><th></th></tr>
+      <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th>Credit</th><th>Revenue</th><th>Collected</th><th>Outstanding</th><th>Pending to temple</th><th>Last sale</th><th></th></tr>
       ${distributors.map(d => `<tr class="zone-row" onclick="distributorDetails(${d.id}, ${zoneId})">
         <td><strong>${esc(d.name)}</strong><span class="cart-book-barcode">${esc(d.username)}</span></td>
         <td>${d.invoice_count}</td>
@@ -650,9 +653,10 @@ async function zoneDetails(zoneId) {
         <td>&#8377;${Number(d.revenue || 0).toFixed(2)}</td>
         <td>&#8377;${Number(d.collected || 0).toFixed(2)}</td>
         <td>${Number(d.outstanding || 0) > 0 ? `<strong>&#8377;${Number(d.outstanding).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
+        <td>${Number(d.pending_to_temple || 0) > 0 ? `<strong>&#8377;${Number(d.pending_to_temple).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
         <td>${d.last_sale ? esc(formatAuditTime(d.last_sale)) : '&mdash;'}</td>
         <td><button class="action" onclick="event.stopPropagation(); distributorDetails(${d.id}, ${zoneId})">Details</button></td>
-      </tr>`).join('') || '<tr><td colspan="12" class="hint">No distributors assigned to this zone.</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="13" class="hint">No distributors assigned to this zone.</td></tr>'}
     </table>
     <h4>Zone invoices (${invoices.length})</h4>
     <table>
@@ -691,6 +695,7 @@ async function distributorDetails(userId, zoneId) {
       ${miniStat('Total sales', '&#8377;' + Number(s.revenue || 0).toFixed(2))}
       ${miniStat('Collected', '&#8377;' + Number(s.collected || 0).toFixed(2))}
       ${miniStat('Outstanding', '&#8377;' + Number(s.outstanding || 0).toFixed(2))}
+      ${miniStat('Pending to temple', '&#8377;' + Number(s.pending_to_temple || 0).toFixed(2))}
       ${miniStat('Bills', s.invoice_count)}
       ${miniStat('Cash', '&#8377;' + Number(s.cash_total || 0).toFixed(2))}
       ${miniStat('UPI', '&#8377;' + Number(s.upi_total || 0).toFixed(2))}
@@ -699,6 +704,7 @@ async function distributorDetails(userId, zoneId) {
       ${miniStat('Books sold', s.books_sold)}
       ${miniStat('Discount given', '&#8377;' + Number(s.discount || 0).toFixed(2))}
     </div>
+    <p class="hint">Outstanding is what customers still owe this distributor. Pending to temple is cash he collected but has not handed over &mdash; collect it from the zone in Payment In, not from the distributor again.</p>
     <h4>Books sold (${data.books.length})</h4>
     <table><tr><th>Book</th><th>Barcode</th><th>Qty</th><th>Revenue</th></tr>${bookRows}</table>
     <h4>Invoices (${data.invoices.length})</h4>
