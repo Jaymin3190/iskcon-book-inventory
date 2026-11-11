@@ -39,6 +39,7 @@ body {
   color: #fffdf8; font-size: 15px; font-weight: 700; letter-spacing: .04em;
   box-shadow: 0 5px 12px rgba(116, 71, 24, .2);
 }
+.login-mark svg, .sidebar-mark svg { display: block; width: 76%; height: 76%; }
 .login-brand-name { color: #493516; font-size: 15px; font-weight: 700; letter-spacing: .09em; }
 .login-brand-name small { display: block; margin-top: 3px; color: #8a6d3b; font-size: 9px; letter-spacing: .18em; }
 .login-heading { margin-bottom: 25px; }
