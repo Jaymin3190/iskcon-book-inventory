@@ -258,11 +258,14 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         raise HTTPException(400, "Credit bills must be assigned to a distributor")
 
     if distributor_id is not None:
-        # The distributor collected from the customer in full, so the bill is
-        # due to the zone. An amount may be collected at billing, in full or
-        # in part; the rest stays outstanding for a later collection.
+        # Only cash the distributor collected is due to the zone. A UPI or card
+        # payment reaches the temple directly, so that bill is settled at
+        # billing. For cash, an amount may be collected from the distributor at
+        # billing, in full or in part; the rest stays due to the zone.
         amount_paid = 0.0
-        if data.amount_received is not None:
+        if data.payment_mode in ("upi", "card"):
+            amount_paid = total
+        elif data.amount_received is not None:
             amount_paid = round(float(data.amount_received), 2)
             if amount_paid < 0:
                 raise HTTPException(400, "Amount collected cannot be negative")
@@ -530,10 +533,19 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
     total = round(subtotal - discount, 2)
     status = inv["status"]
     fully_paid_before = recorded_paid > 0 and not partially_paid
+    # A distributor bill paid online is settled at billing, because the money
+    # went straight to the temple. Changing a cash bill to UPI or card settles
+    # it too, so it stops being reported as due to the zone.
+    settle_online = (
+        inv["distributor_id"] is not None
+        and payment_mode in ("upi", "card")
+        and recorded_paid <= 0
+        and not razorpay_invoice
+    )
     if not razorpay_invoice:
         # A bill that was already settled follows its corrected total, so the
         # single payment is adjusted rather than leaving a phantom balance.
-        status = "paid" if fully_paid_before else invoice_status_for(total, recorded_paid)
+        status = "paid" if fully_paid_before or settle_online else invoice_status_for(total, recorded_paid)
 
     db.execute(
         """UPDATE invoices
@@ -553,6 +565,14 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
                 (invoice_id, total, payment_mode, payment_ref, user["id"],
                  "Adjusted after invoice edit"),
             )
+    elif settle_online and total > 0:
+        db.execute(
+            """INSERT INTO invoice_payments
+                   (invoice_id, amount, method, reference, received_by, note)
+               VALUES (?,?,?,?,?,?)""",
+            (invoice_id, total, payment_mode, payment_ref, user["id"],
+             "Settled at billing by online payment"),
+        )
     if new_lines is not None:
         db.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
         for book_id, qty, unit_price, line_total in new_lines:

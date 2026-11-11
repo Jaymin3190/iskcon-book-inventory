@@ -1194,11 +1194,26 @@ check("zone UPI bill records online money", code == 200
       and upi_tally["status"] == "paid", upi_tally)
 upi_tally_total = round(float(upi_tally.get("total") or 0), 2)
 
+code, dist_upi = call("POST", "/api/pos/invoices", token=zone_t, body={
+    "customer_name": "Distributor Online", "customer_phone": "9999999999",
+    "payment_mode": "upi", "distributor_id": dist_me["user"]["id"],
+    "items": [{"barcode": credit_book["barcode"], "qty": 1}],
+})
+check("distributor online bill settles at billing instead of being due to the zone",
+      code == 200 and dist_upi["status"] == "paid"
+      and dist_upi["amount_paid"] == dist_upi["total"]
+      and dist_upi["balance_due"] == 0, dist_upi)
+dist_upi_total = round(float(dist_upi.get("total") or 0), 2)
+_, dist_upi_detail = call("GET", f"/api/pos/invoices/{dist_upi['invoice_id']}", token=super_t)
+check("distributor online bill records a non-cash payment", code == 200
+      and [(p["amount"], p["method"]) for p in dist_upi_detail["payments"]]
+      == [(dist_upi_total, "upi")], dist_upi_detail)
+
 _, tally_with_upi = call("GET", "/api/payments/pending-summary", token=temple_t)
 zone_with_upi = next((z for z in tally_with_upi if z["zone_id"] == 2), {})
 check("temple tally keeps online money separate from pending cash", code == 200
       and zone_with_upi.get("online_received")
-      == round(zone_before_tally.get("online_received", 0) + upi_tally_total, 2)
+      == round(zone_before_tally.get("online_received", 0) + upi_tally_total + dist_upi_total, 2)
       and zone_with_upi.get("cash_collected") == zone_before_tally.get("cash_collected")
       and zone_with_upi.get("amount") == zone_before_tally.get("amount"), zone_with_upi)
 check("temple tally adds online money to the zone total", code == 200
@@ -1208,6 +1223,8 @@ check("temple tally adds online money to the zone total", code == 200
 
 code, _ = call("DELETE", f"/api/pos/invoices/{upi_tally['invoice_id']}", token=super_t)
 check("online tally bill can be removed", code == 200)
+code, _ = call("DELETE", f"/api/pos/invoices/{dist_upi['invoice_id']}", token=super_t)
+check("distributor online bill can be removed", code == 200)
 _, tally_after_upi = call("GET", "/api/payments/pending-summary", token=temple_t)
 zone_after_upi = next((z for z in tally_after_upi if z["zone_id"] == 2), {})
 check("temple tally drops the online amount after the bill is removed", code == 200

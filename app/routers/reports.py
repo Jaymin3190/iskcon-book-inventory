@@ -334,11 +334,12 @@ def zone_invoices(zone_id: int, db=Depends(get_db), user=Depends(require_roles("
     sql = """SELECT i.id, i.invoice_number, i.created_at, i.customer_name, i.customer_phone,
                     CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
                          ELSE i.payment_mode END AS payment_mode,
-                    i.payment_ref, i.status, i.total,
+                    i.payment_ref, i.status, i.total, i.distributor_id,
                     COALESCE((SELECT SUM(p.amount) FROM invoice_payments p
                                WHERE p.invoice_id = i.id),0) AS amount_paid,
                     l.name AS location_name,
                     u.name AS cashier_name, u.username AS cashier_username,
+                    u.role AS cashier_role,
                     (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
              FROM invoices i
              JOIN locations l ON l.id = i.location_id

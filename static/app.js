@@ -617,7 +617,7 @@ async function zoneDetails(zoneId) {
       <td>${esc(i.cashier_name || '—')}<span class="cart-book-barcode">${esc(i.cashier_username || '')}</span></td>
       <td>${esc(i.customer_name || '—')}<span class="cart-book-barcode">${esc(i.customer_phone || '')}</span></td>
       <td>${esc(i.payment_mode.toUpperCase())}${i.payment_ref ? `<span class="cart-book-barcode">${esc(i.payment_ref)}</span>` : ''}</td>
-      <td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td>
+      <td><span class="badge ${esc(i.status)}">${esc(invoiceStatusLabel(i))}</span></td>
       <td>${i.books_qty}</td>
       <td>&#8377;${Number(i.total).toFixed(2)}</td>
       <td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td>
@@ -1428,7 +1428,7 @@ async function pos() {
         <div class="form-row"><label>Customer name *</label><input id="custName" required></div>
         <div class="form-row"><label>Phone *</label><input id="custPhone" type="tel" required></div>
         <div class="form-row"><label id="payModeLabel">Payment mode</label>
-          <select id="payMode" onchange="toggleUpiQr()">
+          <select id="payMode" onchange="syncBillingPayer()">
             <option value="cash">Cash</option>
             <option value="upi">UPI</option>
             <option value="card">Card</option>
@@ -1471,11 +1471,19 @@ function billingCanCollectPayer() {
   return hasAnyRole('super_admin', 'zone_admin') && billingIsDistributorBill();
 }
 
+// Only cash collected by the distributor is due to the zone. Online payments
+// reach the temple directly, so there is nothing to collect from the
+// distributor for a UPI or card bill.
+function billingCollectsCash() {
+  const mode = document.getElementById('payMode')?.value || 'cash';
+  return billingCanCollectPayer() && mode === 'cash';
+}
+
 // A distributor bill is money the distributor owes the zone, so it may be
 // collected in full or in part. A walk-in sale is always paid in full.
 function syncBillingPayer() {
   const distributorBill = billingIsDistributorBill();
-  const collectPayer = billingCanCollectPayer();
+  const collectPayer = billingCollectsCash();
   const collectedRow = document.getElementById('payCollectedRow');
   if (collectedRow) collectedRow.hidden = !collectPayer;
   const modeLabel = document.getElementById('payModeLabel');
@@ -1527,7 +1535,7 @@ function renderPosDistributorOptions() {
       <option value="">Walk-in customer (paid in full)</option>
       ${distributors.map(distributor => `<option value="${distributor.id}"${String(distributor.id) === previous ? ' selected' : ''}>${esc(distributor.name)}</option>`).join('')}
     </select>
-    <span class="hint">A distributor bill is due to the zone and can be collected in full or in part. It is not added to distributor stock.</span>`;
+    <span class="hint">Only a cash bill is due to the zone; a UPI or card payment settles it at billing. A distributor bill is not added to distributor stock.</span>`;
   syncBillingPayer();
 }
 
@@ -1539,7 +1547,7 @@ function toggleUpiQr() {
   if (panel) panel.hidden = mode !== 'upi';
   if (razorpayInfo) razorpayInfo.hidden = mode !== 'razorpay';
   const amountInput = document.getElementById('payAmountReceived');
-  if (amountInput) amountInput.disabled = !billingCanCollectPayer() || mode === 'razorpay';
+  if (amountInput) amountInput.disabled = !billingCollectsCash();
   renderCart();
 }
 
@@ -1604,8 +1612,12 @@ function renderCart() {
       hint.textContent = 'Razorpay collects the full amount through the QR code.';
     } else if (!billingIsDistributorBill()) {
       hint.textContent = 'The customer pays the full amount at billing.';
+    } else if (mode === 'upi' || mode === 'card') {
+      hint.textContent = 'The customer paid online, so the temple has the money and this bill is settled at billing. Nothing is due to the zone.';
     } else if (!billingCanCollectPayer()) {
       hint.textContent = 'The distributor collected the full amount from the customer; this bill is due to the zone.';
+    } else if (!billingCollectsCash()) {
+      hint.textContent = 'A credit sale has no cash to collect yet; this bill is due to the zone.';
     } else {
       const raw = document.getElementById('payAmountReceived')?.value;
       if (raw === '' || raw === undefined || raw === null) {
@@ -2017,7 +2029,7 @@ async function checkout() {
   if (!custName) return toast('Customer name is required', 'error');
   if (!custPhone) return toast('Phone number is required', 'error');
   let amountReceived = null;
-  if (billingCanCollectPayer()) {
+  if (billingCollectsCash()) {
     const amountRaw = document.getElementById('payAmountReceived').value.trim();
     if (amountRaw !== '') amountReceived = Number(amountRaw);
     if (amountReceived !== null && (!Number.isFinite(amountReceived) || amountReceived < 0)) {
@@ -2335,9 +2347,13 @@ function isDistributorBill(inv) {
 
 function invoiceStatusLabel(inv, forceDistributor = false) {
   const distributorBill = forceDistributor || isDistributorBill(inv);
+  const credit = distributorBill && String(inv.payment_mode || '').toLowerCase() === 'ledger';
   if (inv.status === 'paid') return distributorBill ? 'Settled' : 'Paid';
   if (inv.status === 'partial') return distributorBill ? 'Part settled' : 'Part paid';
-  if (inv.status === 'unpaid') return distributorBill ? 'Due to zone' : 'Unpaid';
+  if (inv.status === 'unpaid') {
+    if (credit) return 'Credit';
+    return distributorBill ? 'Due to zone' : 'Unpaid';
+  }
   if (inv.status === 'pending') return 'Awaiting Razorpay';
   if (inv.status === 'failed') return 'Failed';
   return inv.status;

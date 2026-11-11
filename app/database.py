@@ -347,6 +347,40 @@ def _migrate_invoice_payments(conn):
     )
 
 
+def _migrate_distributor_online_bills(conn):
+    """Settle distributor bills whose customer paid online.
+
+    Only cash collected by the distributor is due to the zone. A UPI or card
+    payment reaches the temple directly, so those older bills must stop being
+    reported as due to the zone and as customer dues.
+    """
+    conn.execute(
+        """INSERT INTO invoice_payments
+               (invoice_id, amount, method, reference, received_by, received_at, note)
+           SELECT i.id, i.total,
+                  CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'upi'
+                       ELSE i.payment_mode END,
+                  i.payment_ref, i.cashier_id, i.created_at,
+                  'Settled at billing by online payment'
+             FROM invoices i
+            WHERE i.distributor_id IS NOT NULL
+              AND i.status = 'unpaid'
+              AND i.total > 0
+              AND COALESCE(i.payment_mode, '') IN ('upi', 'card')
+              AND NOT EXISTS (SELECT 1 FROM invoice_payments p WHERE p.invoice_id = i.id)"""
+    )
+    conn.execute(
+        """UPDATE invoices
+              SET status = 'paid'
+            WHERE distributor_id IS NOT NULL
+              AND status = 'unpaid'
+              AND total > 0
+              AND COALESCE(payment_mode, '') IN ('upi', 'card')
+              AND (SELECT COALESCE(SUM(p.amount),0) FROM invoice_payments p
+                    WHERE p.invoice_id = invoices.id) >= total - 0.009"""
+    )
+
+
 def _has_unique_invoice_index(conn) -> bool:
     for index in conn.execute("PRAGMA index_list(cash_submission_items)").fetchall():
         # PRAGMA index_list: seq, name, unique, origin, partial
@@ -405,6 +439,7 @@ def init_db():
     _migrate_invoice_share_tokens(conn)
     _migrate_invoice_distributor(conn)
     _migrate_invoice_payments(conn)
+    _migrate_distributor_online_bills(conn)
     _migrate_cash_submission_items(conn)
     _migrate_transfer_numbers(conn)
     conn.commit()

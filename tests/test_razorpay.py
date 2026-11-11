@@ -180,6 +180,68 @@ class RazorpayIntegrationTests(unittest.TestCase):
         self.assertEqual(result["amount_paid"], 0)
         self.assertEqual(result["balance_due"], 150.25)
 
+    def test_distributor_online_bill_is_settled_at_billing(self):
+        admin = self.db.execute("SELECT * FROM users WHERE id = 3").fetchone()
+        for mode in ("upi", "card"):
+            data = pos.InvoiceIn(
+                location_id=2,
+                distributor_id=2,
+                customer_name="Online customer",
+                customer_phone="9999999999",
+                payment_mode=mode,
+                items=[pos.InvoiceItemIn(barcode="1234567890", qty=1)],
+            )
+
+            result = pos.create_invoice(data, db=self.db, user=admin)
+
+            self.assertEqual(result["status"], "paid")
+            self.assertEqual(result["amount_paid"], 150.25)
+            self.assertEqual(result["balance_due"], 0)
+            saved = self.db.execute(
+                "SELECT payment_mode, status FROM invoices WHERE id = ?",
+                (result["invoice_id"],),
+            ).fetchone()
+            self.assertEqual(tuple(saved), (mode, "paid"))
+            payments = self.db.execute(
+                "SELECT amount, method FROM invoice_payments WHERE invoice_id = ?",
+                (result["invoice_id"],),
+            ).fetchall()
+            self.assertEqual([tuple(p) for p in payments], [(150.25, mode)])
+
+    def test_migration_settles_old_online_distributor_bills(self):
+        from app.database import _migrate_distributor_online_bills
+
+        self.db.executemany(
+            """INSERT INTO invoices
+                   (invoice_number, location_id, payment_mode, subtotal, discount, total,
+                    status, cashier_id, distributor_id)
+               VALUES (?, 2, ?, 150.25, 0, 150.25, 'unpaid', 3, 2)""",
+            [("OLD-UPI", "upi"), ("OLD-CARD", "card"), ("OLD-CASH", "cash")],
+        )
+        self.db.commit()
+
+        _migrate_distributor_online_bills(self.db)
+
+        rows = {
+            row["invoice_number"]: row
+            for row in self.db.execute(
+                "SELECT invoice_number, status FROM invoices"
+            ).fetchall()
+        }
+        self.assertEqual(rows["OLD-UPI"]["status"], "paid")
+        self.assertEqual(rows["OLD-CARD"]["status"], "paid")
+        # Cash collected by the distributor is still due to the zone.
+        self.assertEqual(rows["OLD-CASH"]["status"], "unpaid")
+        payments = self.db.execute(
+            """SELECT i.invoice_number, p.amount, p.method
+                 FROM invoice_payments p JOIN invoices i ON i.id = p.invoice_id
+                ORDER BY i.invoice_number"""
+        ).fetchall()
+        self.assertEqual(
+            [tuple(p) for p in payments],
+            [("OLD-CARD", 150.25, "card"), ("OLD-UPI", 150.25, "upi")],
+        )
+
     def test_razorpay_is_rejected_without_razorpay_credentials(self):
         data = pos.InvoiceIn(
             customer_name="Test customer",
