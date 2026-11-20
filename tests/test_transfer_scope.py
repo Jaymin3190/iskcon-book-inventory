@@ -26,6 +26,10 @@ class TransferScopeTests(unittest.TestCase):
             """INSERT INTO users (id, username, password_hash, name, role, zone_id)
                VALUES (1, 'zone-admin', 'not-used', 'Zone Admin', 'zone_admin', 2)"""
         )
+        self.db.execute(
+            """INSERT INTO users (id, username, password_hash, name, role, zone_id)
+               VALUES (2, 'super-admin', 'not-used', 'Super Admin', 'super_admin', NULL)"""
+        )
         self.db.executemany(
             """INSERT INTO transfers
                    (id, request_number, from_location_id, to_location_id, status)
@@ -38,6 +42,9 @@ class TransferScopeTests(unittest.TestCase):
         self.db.commit()
         self.zone_admin = self.db.execute(
             "SELECT * FROM users WHERE id = 1"
+        ).fetchone()
+        self.super_admin = self.db.execute(
+            "SELECT * FROM users WHERE id = 2"
         ).fetchone()
 
     def tearDown(self):
@@ -53,18 +60,30 @@ class TransferScopeTests(unittest.TestCase):
 
         self.assertEqual(transfer["request_number"], "TRF-ZONE-A")
 
-    def test_zone_admin_cannot_open_or_approve_another_zones_transfer(self):
+    def test_zone_admin_cannot_approve_any_transfer(self):
+        for transfer_id in (1, 2):
+            with self.assertRaises(HTTPException) as approve_error:
+                approve_transfer(transfer_id, db=self.db, user=self.zone_admin)
+            self.assertEqual(approve_error.exception.status_code, 403)
+        statuses = self.db.execute(
+            "SELECT status FROM transfers ORDER BY id"
+        ).fetchall()
+        self.assertEqual([row["status"] for row in statuses], ["requested", "requested"])
+
+    def test_super_admin_can_approve_any_transfer(self):
+        for transfer_id in (1, 2):
+            result = approve_transfer(transfer_id, db=self.db, user=self.super_admin)
+            self.assertEqual(result["status"], "approved")
+
+        statuses = self.db.execute(
+            "SELECT status FROM transfers ORDER BY id"
+        ).fetchall()
+        self.assertEqual([row["status"] for row in statuses], ["approved", "approved"])
+
+    def test_zone_admin_cannot_open_another_zones_transfer(self):
         with self.assertRaises(HTTPException) as detail_error:
             get_transfer(2, db=self.db, user=self.zone_admin)
         self.assertEqual(detail_error.exception.status_code, 403)
-
-        with self.assertRaises(HTTPException) as approve_error:
-            approve_transfer(2, db=self.db, user=self.zone_admin)
-        self.assertEqual(approve_error.exception.status_code, 403)
-        status = self.db.execute(
-            "SELECT status FROM transfers WHERE id = 2"
-        ).fetchone()["status"]
-        self.assertEqual(status, "requested")
 
 
 if __name__ == "__main__":

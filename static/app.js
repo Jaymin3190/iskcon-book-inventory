@@ -1023,7 +1023,7 @@ async function renderTransfers() {
 
 function transferNextStep(t) {
   switch (t.status) {
-    case 'requested': return 'Waiting for approval';
+    case 'requested': return 'Waiting for super admin approval';
     case 'approved': return 'Ready to dispatch';
     case 'dispatched': return 'In transit — confirm receipt';
     case 'received': return 'Completed';
@@ -1054,9 +1054,10 @@ function transferTimeline(t) {
 }
 
 function transferDetailActions(t) {
+  const canApprove = hasRole('super_admin');
   const canManage = hasAnyRole('super_admin', 'zone_admin');
   let html = '';
-  if (canManage && t.status === 'requested') {
+  if (canApprove && t.status === 'requested') {
     html += `<button class="primary" onclick="tAction(${t.id}, 'approve')">Approve request</button>`;
     html += `<button class="danger" onclick="tAction(${t.id}, 'reject')">Reject</button>`;
   }

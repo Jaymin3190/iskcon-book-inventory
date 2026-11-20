@@ -109,7 +109,10 @@ code, _ = call("POST", f"/api/stock/transfers/{tid}/approve", token=temple_t)
 check("temple user cannot approve transfers", code == 403)
 
 code, _ = call("POST", f"/api/stock/transfers/{tid}/approve", token=zone_t)
-check("zone admin approves transfer", code == 200)
+check("zone admin cannot approve their own transfer", code == 403)
+
+code, _ = call("POST", f"/api/stock/transfers/{tid}/approve", token=super_t)
+check("super admin approves transfer", code == 200)
 
 code, _ = call("POST", f"/api/stock/transfers/{tid}/dispatch", token=temple_t)
 check("temple user cannot dispatch transfers", code == 403)
@@ -882,7 +885,7 @@ code, transfer_detail = call("GET", f"/api/stock/transfers/{tid}", token=zone_t)
 check("transfer detail includes items", code == 200 and len(transfer_detail["items"]) == 4)
 check("transfer detail names the people at each step",
       transfer_detail.get("requested_by_name") == "leader-temple-zone"
-      and transfer_detail.get("approved_by_name") == "leader-temple-zone"
+      and transfer_detail.get("approved_by_name") == "superadmin"
       and transfer_detail.get("dispatched_by_name") == "leader-temple-zone"
       and transfer_detail.get("received_by_name") == "leader-temple-zone",
       transfer_detail)
@@ -904,7 +907,7 @@ code, rejected_transfer = call("POST", "/api/stock/transfers", token=zone_t, bod
     "from_location_id": 1, "to_location_id": 2, "items": [{"book_id": 1, "qty": 1}],
 })
 rejected_id = rejected_transfer.get("id")
-code, rejected = call("POST", f"/api/stock/transfers/{rejected_id}/reject", token=zone_t)
+code, rejected = call("POST", f"/api/stock/transfers/{rejected_id}/reject", token=super_t)
 check("requested transfer can be rejected", code == 200 and rejected["status"] == "rejected")
 code, _ = call("DELETE", f"/api/stock/transfers/{rejected_id}", token=zone_t)
 check("rejected transfer can be deleted", code == 200)

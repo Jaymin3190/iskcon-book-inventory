@@ -349,7 +349,7 @@ def get_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_role
 
 def _transfer_next_step(status) -> str:
     return {
-        "requested": "Waiting for approval",
+        "requested": "Waiting for super admin approval",
         "approved": "Ready to dispatch",
         "dispatched": "In transit — confirm receipt",
         "received": "Completed",
@@ -589,7 +589,14 @@ def request_transfer(data: TransferIn, db=Depends(get_db), user=Depends(require_
 
 
 @router.post("/transfers/{transfer_id}/approve")
-def approve_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+def approve_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
+    """Only the super admin approves stock leaving the temple warehouse.
+
+    A zone admin requesting stock cannot also approve the same request; that
+    would make the approval step meaningless.
+    """
+    if user["role"] != "super_admin":
+        raise HTTPException(403, "Only the super admin can approve transfers")
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
@@ -607,7 +614,9 @@ def approve_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_
 
 
 @router.post("/transfers/{transfer_id}/reject")
-def reject_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin"))):
+def reject_transfer(transfer_id: int, db=Depends(get_db), user=Depends(require_roles("super_admin"))):
+    if user["role"] != "super_admin":
+        raise HTTPException(403, "Only the super admin can reject transfers")
     t = db.execute("SELECT * FROM transfers WHERE id = ?", (transfer_id,)).fetchone()
     if not t:
         raise HTTPException(404, "Transfer not found")
