@@ -228,6 +228,14 @@ tr:hover td { background: #fbf7ec; }
 .table-scroll::-webkit-scrollbar-track { background: #f6efe1; border-radius: 99px; }
 .table-scroll::-webkit-scrollbar-thumb { background: #c9a77b; border-radius: 99px; }
 .table-scroll::-webkit-scrollbar-thumb:hover { background: #8a5a1f; }
+.invoice-history-top-scroll {
+  height: 18px; margin-bottom: 6px;
+  scrollbar-width: auto;
+}
+.invoice-history-top-scroll::-webkit-scrollbar { height: 14px; }
+.invoice-history-scroll-spacer { height: 1px; }
+.invoice-history-table-scroll { scrollbar-width: none; }
+.invoice-history-table-scroll::-webkit-scrollbar { display: none; }
 @media (min-width: 601px) {
   .table-scroll > table { width: max-content; min-width: 100%; table-layout: auto; }
 }

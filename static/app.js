@@ -2424,12 +2424,48 @@ function canReceiveInvoicePayment(inv) {
   return Number(inv.balance_due || 0) > 0;
 }
 
+function updateInvoiceHistoryScrollbar() {
+  const topScroll = document.getElementById('invoiceHistoryTopScroll');
+  const tableScroll = document.getElementById('invoiceHistoryTable');
+  const spacer = topScroll?.firstElementChild;
+  if (!topScroll || !tableScroll || !spacer) return;
+  spacer.style.width = `${tableScroll.scrollWidth}px`;
+  topScroll.scrollLeft = tableScroll.scrollLeft;
+}
+
+function setupInvoiceHistoryScrollbar() {
+  const tableScroll = document.getElementById('invoiceHistoryTable');
+  if (!tableScroll) return;
+
+  const topScroll = document.createElement('div');
+  topScroll.id = 'invoiceHistoryTopScroll';
+  topScroll.className = 'table-scroll invoice-history-top-scroll';
+  topScroll.setAttribute('role', 'region');
+  topScroll.setAttribute('aria-label', 'Scroll invoice history horizontally');
+  const spacer = document.createElement('div');
+  spacer.className = 'invoice-history-scroll-spacer';
+  topScroll.appendChild(spacer);
+  tableScroll.parentNode.insertBefore(topScroll, tableScroll);
+
+  let syncing = false;
+  const syncScroll = (source, target) => {
+    if (syncing) return;
+    syncing = true;
+    target.scrollLeft = source.scrollLeft;
+    syncing = false;
+  };
+  topScroll.addEventListener('scroll', () => syncScroll(topScroll, tableScroll));
+  tableScroll.addEventListener('scroll', () => syncScroll(tableScroll, topScroll));
+  updateInvoiceHistoryScrollbar();
+  window.addEventListener('resize', updateInvoiceHistoryScrollbar);
+}
+
 async function invoiceList() {
   const rows = await api('/api/pos/invoices');
   const canDeleteAny = hasAnyRole('super_admin', 'zone_admin');
   openModal(`<h3>Invoice history</h3>
     <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only. Distributors see bills credited to them.</p>
-    <div class="table-scroll"><table>
+    <div id="invoiceHistoryTable" class="table-scroll invoice-history-table-scroll"><table>
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Bill area</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Received</th><th>Due</th><th>Actions</th></tr>
       ${rows.map(i => `<tr class="clickable-row" onclick="rowOpen(event, 'invoiceDetail', ${i.id})">
         <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
@@ -2441,6 +2477,7 @@ async function invoiceList() {
     ${hasAnyRole('super_admin', 'zone_admin') ? `<div class="toolbar" style="margin-top:14px">
       <button class="primary" onclick="invoiceBulkCollect()">Collect from distributor</button>
     </div>` : ''}`);
+  setupInvoiceHistoryScrollbar();
 }
 
 async function invoiceDetail(invoiceId) {
