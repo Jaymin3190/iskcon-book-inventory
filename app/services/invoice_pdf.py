@@ -129,12 +129,6 @@ def build_invoice_pdf(invoice, items):
         paid_cents = total_cents if paid_value is None else round(float(paid_value) * 100)
     except (KeyError, IndexError, TypeError):
         paid_cents = total_cents
-    balance_cents = max(0, total_cents - paid_cents)
-    if balance_cents > 0:
-        story.append(Paragraph(
-            f"<b>Amount paid:</b> {money(paid_cents)} &nbsp;&nbsp; "
-            f"<b>Balance due:</b> {money(balance_cents)}",
-            styles["BodyText"],
-        ))
+    story.append(Paragraph(f"<b>Amount paid:</b> {money(paid_cents)}", styles["BodyText"]))
     document.build(story)
     return buffer.getvalue()

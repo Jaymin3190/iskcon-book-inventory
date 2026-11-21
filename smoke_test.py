@@ -1050,18 +1050,21 @@ code, deposit = call("POST", "/api/pos/invoices", token=super_t, body={
     "location_id": 1, "customer_name": "Distributor Deposit", "customer_phone": "9999999999",
     "distributor_id": dist_me["user"]["id"],
     "payment_mode": "cash", "amount_received": 80,
+    "latitude": 22.4707, "longitude": 70.0577,
     "items": [{"barcode": book_seven["barcode"], "qty": 2}],
 })
 check("distributor bill accepts a partial collection at billing", code == 200
       and deposit["total"] == godown_total and deposit["amount_paid"] == 80.0
-      and deposit["balance_due"] == godown_total - 80 and deposit["status"] == "partial", deposit)
+      and deposit["balance_due"] == godown_total - 80 and deposit["status"] == "partial"
+      and deposit["latitude"] == 22.4707 and deposit["longitude"] == 70.0577, deposit)
 
 code, deposit_detail = call("GET", f"/api/pos/invoices/{deposit['invoice_id']}", token=super_t)
 check("partial invoice detail shows the payment ledger", code == 200
       and len(deposit_detail["payments"]) == 1
       and deposit_detail["payments"][0]["amount"] == 80.0
       and deposit_detail["amount_paid"] == 80.0
-      and deposit_detail["balance_due"] == godown_total - 80, deposit_detail)
+      and deposit_detail["balance_due"] == godown_total - 80
+      and deposit_detail["latitude"] == 22.4707 and deposit_detail["longitude"] == 70.0577, deposit_detail)
 
 try:
     with urllib.request.urlopen(
@@ -1073,13 +1076,13 @@ except urllib.error.HTTPError as error:
     partial_public_status = error.code
     partial_public_body = ""
 check("partial invoice public link opens", partial_public_status == 200
-      and "balance due" in partial_public_body.lower())
+      and "balance due" not in partial_public_body.lower())
 
 req = urllib.request.Request(f"{BASE}/api/pos/invoices/{deposit['invoice_id']}/print")
 req.add_header("Authorization", "Bearer " + super_t)
 with urllib.request.urlopen(req) as resp:
     partial_print_body = resp.read().decode()
-check("partial invoice prints with a balance", "Balance due" in partial_print_body)
+check("partial invoice print omits balance due", "Balance due" not in partial_print_body)
 
 code, _ = call("PATCH", f"/api/pos/invoices/{deposit['invoice_id']}", token=super_t, body={
     "discount": 10,

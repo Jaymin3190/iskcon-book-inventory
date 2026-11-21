@@ -147,6 +147,9 @@ CREATE TABLE IF NOT EXISTS invoices (
     subtotal NUMERIC NOT NULL DEFAULT 0,
     discount NUMERIC NOT NULL DEFAULT 0,
     total NUMERIC NOT NULL DEFAULT 0,
+    latitude NUMERIC,
+    longitude NUMERIC,
+    area_name TEXT,
     cashier_id INTEGER REFERENCES users(id),
     distributor_id INTEGER REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -311,6 +314,17 @@ def _migrate_invoice_distributor(conn):
     )
 
 
+def _migrate_invoice_location(conn):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(invoices)")}
+    for column, definition in (
+        ("latitude", "NUMERIC"),
+        ("longitude", "NUMERIC"),
+        ("area_name", "TEXT"),
+    ):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE invoices ADD COLUMN {column} {definition}")
+
+
 def _migrate_invoice_payments(conn):
     """Add the payment ledger and give every historically paid invoice its entry.
 
@@ -438,6 +452,7 @@ def init_db():
     _migrate_razorpay(conn)
     _migrate_invoice_share_tokens(conn)
     _migrate_invoice_distributor(conn)
+    _migrate_invoice_location(conn)
     _migrate_invoice_payments(conn)
     _migrate_distributor_online_bills(conn)
     _migrate_cash_submission_items(conn)

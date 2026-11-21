@@ -1,6 +1,7 @@
+import logging
+import math
 import re
 import secrets
-import logging
 import sqlite3
 from html import escape
 from typing import Optional
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from ..auth import require_roles
 from ..database import get_db
 from ..services.audit import log_audit
+from ..services.geocoding import reverse_geocode
 from ..services.invoice_pdf import build_invoice_pdf
 from ..services.ledger import check_available, move_stock
 from ..services.razorpay import (
@@ -104,6 +106,8 @@ class InvoiceItemIn(BaseModel):
 class InvoiceIn(BaseModel):
     location_id: Optional[int] = None
     distributor_id: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     payment_mode: str = "cash"
@@ -195,6 +199,15 @@ def export_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin"
 def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
     if not data.items:
         raise HTTPException(400, "Cart is empty")
+    if (data.latitude is None) != (data.longitude is None):
+        raise HTTPException(400, "Both latitude and longitude are required")
+    if data.latitude is not None and (
+        not math.isfinite(data.latitude)
+        or not math.isfinite(data.longitude)
+        or not -90 <= data.latitude <= 90
+        or not -180 <= data.longitude <= 180
+    ):
+        raise HTTPException(400, "Invalid bill location coordinates")
     if data.payment_mode not in PAYMENT_MODES:
         raise HTTPException(400, f"Invalid payment mode. Valid: {', '.join(PAYMENT_MODES)}")
     if data.payment_mode == "razorpay" and not razorpay_is_configured():
@@ -297,6 +310,15 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         amount_paid = total
         status = invoice_status_for(total, amount_paid)
 
+    area_name = None
+    location_warning = None
+    if data.latitude is not None:
+        try:
+            area_name = reverse_geocode(data.latitude, data.longitude)
+        except (OSError, TimeoutError, ValueError) as error:
+            logger.warning("OpenStreetMap reverse geocoding failed (%s)", type(error).__name__)
+            location_warning = "The area name could not be looked up."
+
     qr_code = None
     try:
         num = next_invoice_number(db, user)
@@ -305,11 +327,11 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         cur = db.execute(
             """INSERT INTO invoices (invoice_number, share_token, location_id, customer_name, customer_phone,
                                      payment_mode, payment_ref, status, subtotal, discount, total, cashier_id,
-                                     distributor_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                     distributor_id, latitude, longitude, area_name)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (num, share_token, loc_id, customer_name, customer_phone,
              stored_payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"],
-             distributor_id),
+             distributor_id, data.latitude, data.longitude, area_name),
         )
         iid = cur.lastrowid
         for book, q in resolved:
@@ -365,6 +387,10 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         "payment_mode": payment_label,
         "distributor_id": distributor_id,
         "share_token": share_token,
+        "latitude": data.latitude,
+        "longitude": data.longitude,
+        "area_name": area_name,
+        "location_warning": location_warning,
     }
     if qr_code:
         result.update(
@@ -878,15 +904,7 @@ def invoice_html(inv, items, pdf_url=None):
     payment_ref = escape(str(inv["payment_ref"] or ""))
     payment_label = "razorpay" if inv["razorpay_qr_code_id"] else inv["payment_mode"]
     payment = escape(str(payment_label or "").upper())
-    total_cents = round(float(inv["total"]) * 100)
     paid_cents = round(float(_value(inv, "amount_paid", float(inv["total"]))) * 100)
-    balance_cents = max(0, total_cents - paid_cents)
-    balance_row = (
-        f"<p><strong>Amount paid:</strong> {money(paid_cents)} &nbsp; "
-        f"<strong>Balance due:</strong> {money(balance_cents)}</p>"
-        if balance_cents > 0 else
-        f"<p><strong>Amount paid:</strong> {money(paid_cents)}</p>"
-    )
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Invoice {inv['invoice_number']}</title>
     <style>
       * {{ box-sizing: border-box; }}
@@ -955,7 +973,7 @@ def invoice_html(inv, items, pdf_url=None):
     </table>
     <p style="margin-top:12px"><strong>Payment:</strong> {payment}{f" ({payment_ref})" if payment_ref else ""}</p>
     <div class="payment-summary">
-      {balance_row}
+      <p><strong>Amount paid:</strong> {money(paid_cents)}</p>
     </div>
     </body></html>"""
 

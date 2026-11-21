@@ -1452,6 +1452,7 @@ async function pos() {
         <div><strong>Total:</strong> <span id="cartTotal">&#8377;0.00</span></div>
         <button class="primary" onclick="checkout()">Save / Share</button>
       </div>
+      <p class="hint">When you allow location, the coordinates are sent to OpenStreetMap to look up the neighborhood and city. The invoice will still be saved if location or area lookup is unavailable.</p>
     </div>`;
   renderPosDistributorOptions();
   renderCart();
@@ -2021,6 +2022,39 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+function captureBillLocation() {
+  if (!navigator.geolocation) {
+    return Promise.resolve({ location: null, reason: 'Location is not supported by this browser.' });
+  }
+  return new Promise(resolve => {
+    try {
+      navigator.geolocation.getCurrentPosition(
+        position => resolve({
+          location: {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          },
+          reason: '',
+        }),
+        error => {
+          const reasons = {
+            1: 'Location permission was denied.',
+            2: 'The device could not determine its location.',
+            3: 'Location lookup timed out.',
+          };
+          resolve({
+            location: null,
+            reason: reasons[error.code] || 'Location could not be captured.',
+          });
+        },
+        { enableHighAccuracy: false, maximumAge: 0, timeout: 10000 },
+      );
+    } catch (error) {
+      resolve({ location: null, reason: 'Location could not be captured.' });
+    }
+  });
+}
+
 async function checkout() {
   if (!state.cart.length) { toast('Cart is empty', 'error'); return; }
   const custName = document.getElementById('custName').value.trim();
@@ -2040,11 +2074,14 @@ async function checkout() {
   const purchasedItems = state.cart.map(i => ({ title: i.title, qty: i.qty }));
   const distributorSelect = document.getElementById('posDistributor');
   const distributorId = distributorSelect && distributorSelect.value ? Number(distributorSelect.value) : null;
+  const { location, reason: locationWarning } = await captureBillLocation();
   let res;
   try {
     res = await api('/api/pos/invoices', { method: 'POST', body: {
       location_id: state.user.role !== 'super_admin' ? state.user.zone_id : Number(document.getElementById('billLoc').value),
       distributor_id: distributorId,
+      latitude: location?.latitude ?? null,
+      longitude: location?.longitude ?? null,
       customer_name: custName, customer_phone: custPhone,
       payment_mode: payMode, payment_ref: payRef,
       amount_received: amountReceived,
@@ -2063,6 +2100,7 @@ async function checkout() {
     total: Number(res.total), items: purchasedItems,
     shareToken: res.share_token,
   };
+  const billLocationWarning = locationWarning || res.location_warning;
   if (payMode === 'razorpay') {
     state.pendingPayment = {
       invoiceId: res.invoice_id,
@@ -2073,22 +2111,26 @@ async function checkout() {
       items: purchasedItems,
     };
     showPendingPayment(res);
-    toast('Invoice saved; waiting for Razorpay payment confirmation', 'success');
+    toast(billLocationWarning
+      ? `Invoice saved${location ? ' with coordinates' : ' without location'}: ${billLocationWarning}`
+      : 'Invoice saved; waiting for Razorpay payment confirmation', billLocationWarning ? 'info' : 'success');
     return;
   }
   showSavedInvoice(res, `Payment: ${res.payment_mode.toUpperCase()}${payRef ? ` (${payRef})` : ''}`);
-  toast('Invoice saved: ' + res.invoice_number, 'success');
+  toast(billLocationWarning
+    ? `Invoice saved${location ? ' with coordinates' : ' without location'}: ${billLocationWarning}`
+    : 'Invoice saved: ' + res.invoice_number, billLocationWarning ? 'info' : 'success');
 }
 
 function showSavedInvoice(invoice, detail) {
-  const due = Number(invoice.balance_due || 0);
+  const hasLocation = invoice.latitude != null && invoice.longitude != null
+    && Number.isFinite(Number(invoice.latitude)) && Number.isFinite(Number(invoice.longitude));
+  const mapUrl = hasLocation
+    ? `https://www.google.com/maps?q=${Number(invoice.latitude)},${Number(invoice.longitude)}`
+    : '';
   openModal(`<h3>Invoice saved</h3>
     <p><strong>${esc(invoice.invoice_number)}</strong> &mdash; &#8377;${Number(invoice.total).toFixed(2)}</p>
-    ${due > 0
-      ? `<p class="hint"><strong>Due to the zone:</strong> &#8377;${due.toFixed(2)}. ${hasAnyRole('super_admin', 'zone_admin')
-        ? 'Collect it later from Invoice history &rarr; Receive payment.'
-        : 'The zone team collects this amount from you.'}</p>`
-      : ''}
+    ${hasLocation ? `<p class="hint"><strong>Bill area:</strong> ${esc(invoice.area_name || 'Area name unavailable')} · <a href="${mapUrl}" target="_blank" rel="noopener noreferrer">View on map</a></p>` : ''}
     <p class="hint">${esc(detail)}. Share opens the customer's WhatsApp chat with their invoice and a secure link to view or download the PDF. Save downloads the PDF again.</p>
     <div class="toolbar">
       <button class="primary" onclick="shareSavedInvoice(${invoice.invoice_id})">Share</button>
@@ -2388,12 +2430,13 @@ async function invoiceList() {
   openModal(`<h3>Invoice history</h3>
     <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only. Distributors see bills credited to them.</p>
     <div class="table-scroll"><table>
-      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Received</th><th>Due</th><th>Actions</th></tr>
+      <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Bill area</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Received</th><th>Due</th><th>Actions</th></tr>
       ${rows.map(i => `<tr class="clickable-row" onclick="rowOpen(event, 'invoiceDetail', ${i.id})">
         <td>${esc(i.invoice_number)}</td><td>${esc(formatAuditTime(i.created_at))}</td><td>${esc(i.cashier_name || '—')}</td><td>${esc(i.location_name)}</td>
+        <td>${esc(i.area_name || '—')}</td>
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(invoiceStatusLabel(i))}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td><td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td><td>${Number(i.balance_due || 0) > 0 ? `<strong>&#8377;${Number(i.balance_due).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
         <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${canEditInvoice(i) ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${canReceiveInvoicePayment(i) ? `<button class="action" onclick="invoiceReceivePayment(${i.id})">Receive payment</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="event.stopPropagation(); invoiceDelete(${i.id})">Delete</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="11" class="hint">No invoices yet.</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="12" class="hint">No invoices yet.</td></tr>'}
     </table></div>
     ${hasAnyRole('super_admin', 'zone_admin') ? `<div class="toolbar" style="margin-top:14px">
       <button class="primary" onclick="invoiceBulkCollect()">Collect from distributor</button>
