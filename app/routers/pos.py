@@ -971,9 +971,6 @@ def invoice_html(inv, items, pdf_url=None):
       </tbody>
     </table>
     <p style="margin-top:12px"><strong>Payment:</strong> {payment}{f" ({payment_ref})" if payment_ref else ""}</p>
-    <div class="payment-summary">
-      <p><strong>Amount paid:</strong> {money(paid_cents)}</p>
-    </div>
     </body></html>"""
 
 
