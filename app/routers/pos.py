@@ -904,7 +904,6 @@ def invoice_html(inv, items, pdf_url=None):
     payment_ref = escape(str(inv["payment_ref"] or ""))
     payment_label = "razorpay" if inv["razorpay_qr_code_id"] else inv["payment_mode"]
     payment = escape(str(payment_label or "").upper())
-    paid_cents = round(float(_value(inv, "amount_paid", float(inv["total"]))) * 100)
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Invoice {inv['invoice_number']}</title>
     <style>
       * {{ box-sizing: border-box; }}

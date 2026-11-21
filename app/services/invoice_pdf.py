@@ -123,12 +123,5 @@ def build_invoice_pdf(invoice, items):
     if invoice["payment_ref"]:
         payment += f" ({invoice['payment_ref']})"
     story.append(Paragraph(f"<b>Payment:</b> {escape(payment)}", styles["BodyText"]))
-    total_cents = round(float(invoice["total"]) * 100)
-    try:
-        paid_value = invoice["amount_paid"]
-        paid_cents = total_cents if paid_value is None else round(float(paid_value) * 100)
-    except (KeyError, IndexError, TypeError):
-        paid_cents = total_cents
-    story.append(Paragraph(f"<b>Amount paid:</b> {money(paid_cents)}", styles["BodyText"]))
     document.build(story)
     return buffer.getvalue()

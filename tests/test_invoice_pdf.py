@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.database import _migrate_invoice_location
 from app.services import geocoding
+from app.services import invoice_pdf
 from app.services.invoice_pdf import build_invoice_pdf
 from app.routers.pos import invoice_html
 
@@ -41,7 +42,7 @@ class InvoicePdfTests(unittest.TestCase):
         request = urlopen.call_args.args[0]
         self.assertEqual(request.get_header("User-agent"), "iskcon-book-inventory/1.0")
 
-    def test_builds_a_pdf_receipt_with_ist_invoice_details(self):
+    def test_builds_a_pdf_receipt_without_paid_or_due_amounts(self):
         invoice = {
             "invoice_number": "INV-cashier-0001",
             "customer_name": "A & B",
@@ -62,12 +63,17 @@ class InvoicePdfTests(unittest.TestCase):
             "line_total": 150.25,
         }]
 
-        result = build_invoice_pdf(invoice, items)
+        with patch("app.services.invoice_pdf.Paragraph", wraps=invoice_pdf.Paragraph) as paragraph:
+            result = build_invoice_pdf(invoice, items)
 
         self.assertTrue(result.startswith(b"%PDF-"))
         self.assertIn(b"%%EOF", result)
+        paragraph_text = " ".join(str(call.args[0]) for call in paragraph.call_args_list)
+        self.assertNotIn("Amount paid", paragraph_text)
+        self.assertNotIn("Balance due", paragraph_text)
+        self.assertNotIn("Amount due", paragraph_text)
 
-    def test_printable_invoice_omits_balance_due(self):
+    def test_printable_invoice_omits_paid_and_due_amounts(self):
         invoice = {
             "invoice_number": "INV-cashier-0002",
             "customer_name": "Customer",
@@ -91,7 +97,7 @@ class InvoicePdfTests(unittest.TestCase):
 
         result = invoice_html(invoice, items)
 
-        self.assertIn("Amount paid:", result)
+        self.assertNotIn("Amount paid:", result)
         self.assertNotIn("Balance due", result)
         self.assertNotIn("Amount due", result)
 
