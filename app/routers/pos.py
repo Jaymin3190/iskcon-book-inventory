@@ -336,8 +336,8 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         iid = cur.lastrowid
         for book, q in resolved:
             db.execute(
-                "INSERT INTO invoice_items (invoice_id, book_id, qty, unit_price, line_total) VALUES (?,?,?,?,?)",
-                (iid, book["id"], q, book["price"], round(book["price"] * q, 2)),
+                "INSERT INTO invoice_items (invoice_id, book_id, qty, unit_price, unit_cost, line_total) VALUES (?,?,?,?,?,?)",
+                (iid, book["id"], q, book["price"], book["cost_price"], round(book["price"] * q, 2)),
             )
             move_stock(
                 db, book["id"], loc_id, -q, "SALE_OUT", "invoices", iid, user["id"], num,
@@ -437,6 +437,9 @@ def get_invoice(invoice_id: int, db=Depends(get_db), user=Depends(require_roles(
     ).fetchall()
     data = decorate_invoice(dict(inv))
     data["items"] = [dict(r) for r in items]
+    if user["role"] == "distributor":
+        for item in data["items"]:
+            item.pop("unit_cost", None)
     data["payments"] = [dict(r) for r in payments]
     data.update(invoice_payment_summary(db, invoice_id))
     data["handed_over"] = bool(
@@ -513,6 +516,8 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
         for book_id, (book, qty) in resolved.items():
             old = old_by_book.get(book_id)
             unit_price = float(old["unit_price"]) if old else float(book["price"])
+            # Keep the original cost snapshot when the line already existed.
+            unit_cost = float(old["unit_cost"]) if old and old["unit_cost"] else float(book["cost_price"] or 0)
             if old:
                 difference = qty - int(old["qty"])
                 if difference > 0 and not check_available(db, book_id, inv["location_id"], difference):
@@ -523,11 +528,11 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
                 if not check_available(db, book_id, inv["location_id"], qty):
                     raise HTTPException(400, f"Insufficient stock for '{book['title']}' at this location")
                 deltas.append((book_id, -qty))
-            new_lines.append((book_id, qty, unit_price, round(unit_price * qty, 2)))
+            new_lines.append((book_id, qty, unit_price, unit_cost, round(unit_price * qty, 2)))
         for book_id, old in old_by_book.items():
             if book_id not in resolved:
                 deltas.append((book_id, int(old["qty"])))
-        subtotal = round(sum(line[3] for line in new_lines), 2)
+        subtotal = round(sum(line[4] for line in new_lines), 2)
 
         try:
             for book_id, delta in deltas:
@@ -611,10 +616,10 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
         )
     if new_lines is not None:
         db.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
-        for book_id, qty, unit_price, line_total in new_lines:
+        for book_id, qty, unit_price, unit_cost, line_total in new_lines:
             db.execute(
-                "INSERT INTO invoice_items (invoice_id, book_id, qty, unit_price, line_total) VALUES (?,?,?,?,?)",
-                (invoice_id, book_id, qty, unit_price, line_total),
+                "INSERT INTO invoice_items (invoice_id, book_id, qty, unit_price, unit_cost, line_total) VALUES (?,?,?,?,?,?)",
+                (invoice_id, book_id, qty, unit_price, unit_cost, line_total),
             )
     db.commit()
     log_audit(
@@ -642,6 +647,9 @@ def update_invoice(invoice_id: int, data: InvoiceEditIn, db=Depends(get_db), use
     ).fetchall()
     result = decorate_invoice(dict(updated))
     result["items"] = [dict(row) for row in items]
+    if user["role"] == "distributor":
+        for item in result["items"]:
+            item.pop("unit_cost", None)
     return result
 
 

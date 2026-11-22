@@ -17,6 +17,7 @@ class BookIn(BaseModel):
     language: Optional[str] = None
     publication: Optional[str] = None
     price: float = 0
+    cost_price: float = 0
 
 
 class BookPatch(BaseModel):
@@ -26,6 +27,15 @@ class BookPatch(BaseModel):
     language: Optional[str] = None
     publication: Optional[str] = None
     price: Optional[float] = None
+    cost_price: Optional[float] = None
+
+
+def _visible_book(row, user):
+    """Cost price is internal: distributors must never see it."""
+    data = dict(row)
+    if user["role"] == "distributor":
+        data.pop("cost_price", None)
+    return data
 
 
 @router.get("")
@@ -37,7 +47,7 @@ def list_books(q: str = None, db=Depends(get_db), user=Depends(require_roles("su
         like = f"%{q}%"
         params = [like, like, like]
     sql += " ORDER BY title"
-    return [dict(r) for r in db.execute(sql, params).fetchall()]
+    return [_visible_book(r, user) for r in db.execute(sql, params).fetchall()]
 
 
 @router.get("/lookup/{barcode}")
@@ -48,7 +58,7 @@ def lookup_barcode(barcode: str, db=Depends(get_db), user=Depends(require_roles(
     ).fetchone()
     if not book:
         raise HTTPException(404, "No book found for this barcode/ISBN")
-    return dict(book)
+    return _visible_book(book, user)
 
 
 @router.post("")
@@ -56,10 +66,13 @@ def create_book(data: BookIn, db=Depends(get_db), user=Depends(require_roles("su
     dup = db.execute("SELECT id FROM books WHERE barcode = ?", (data.barcode,)).fetchone()
     if dup:
         raise HTTPException(409, "A book with this barcode already exists")
+    if data.cost_price < 0:
+        raise HTTPException(400, "Cost price cannot be negative")
     cur = db.execute(
-        """INSERT INTO books (title, isbn, barcode, language, publication, price)
-           VALUES (?,?,?,?,?,?)""",
-        (data.title, data.isbn, data.barcode, data.language, data.publication, data.price),
+        """INSERT INTO books (title, isbn, barcode, language, publication, price, cost_price)
+           VALUES (?,?,?,?,?,?,?)""",
+        (data.title, data.isbn, data.barcode, data.language, data.publication, data.price,
+         data.cost_price),
     )
     db.commit()
     log_audit(db, user["id"], "BOOK_CREATE", "book", cur.lastrowid, data.title, user["username"])
@@ -75,12 +88,14 @@ def update_book(book_id: int, data: BookPatch, db=Depends(get_db), user=Depends(
         dup = db.execute("SELECT id FROM books WHERE barcode = ? AND id != ?", (data.barcode, book_id)).fetchone()
         if dup:
             raise HTTPException(409, "A book with this barcode already exists")
+    if data.cost_price is not None and data.cost_price < 0:
+        raise HTTPException(400, "Cost price cannot be negative")
     fields, values = [], []
-    for key in ("title", "isbn", "barcode", "language", "publication", "price"):
+    for key in ("title", "isbn", "barcode", "language", "publication", "price", "cost_price"):
         if key not in data.model_fields_set:
             continue
         val = getattr(data, key)
-        if val is None and key in ("title", "barcode", "price"):
+        if val is None and key in ("title", "barcode", "price", "cost_price"):
             raise HTTPException(400, f"{key} cannot be null")
         fields.append(f"{key} = ?")
         values.append(val)

@@ -29,10 +29,12 @@ const TABS = [
   { id: 'books', label: 'Books', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'stock', label: 'Stock', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
   { id: 'transfers', label: 'Transfers', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'purchases', label: 'Purchases', roles: ['super_admin', 'temple'] },
   { id: 'returns', label: 'Returns', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'pos', label: 'POS Billing', roles: ['super_admin', 'zone_admin', 'distributor', 'temple'] },
   { id: 'payments', label: 'Payment In', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'reports', label: 'Reports', roles: ['super_admin', 'zone_admin', 'temple'] },
+  { id: 'finance', label: 'Profit & Loss', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'audit', label: 'Audit Trail', roles: ['super_admin', 'zone_admin'] },
   { id: 'users', label: 'Users', roles: ['super_admin', 'zone_admin'] },
   { id: 'locations', label: 'Locations', roles: ['super_admin'] },
@@ -41,8 +43,8 @@ const TABS = [
 const TAB_GROUPS = [
   { label: 'Overview', tabs: ['dashboard'] },
   { label: 'Catalogue', tabs: ['books', 'stock'] },
-  { label: 'Operations', tabs: ['transfers', 'returns', 'pos', 'payments'] },
-  { label: 'Insights', tabs: ['reports', 'audit'] },
+  { label: 'Operations', tabs: ['transfers', 'purchases', 'returns', 'pos', 'payments'] },
+  { label: 'Insights', tabs: ['reports', 'finance', 'audit'] },
   { label: 'Administration', tabs: ['users', 'locations'] },
 ];
 
@@ -51,10 +53,12 @@ const NAV_ICONS = {
   books: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   stock: '<path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"/><path d="M3 8h18v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8z"/><path d="M10 12h4"/>',
   transfers: '<path d="M4 7h13l-3-3"/><path d="M20 17H7l3 3"/>',
+  purchases: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/>',
   returns: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>',
   pos: '<circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M2 3h3l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 7H6"/>',
   payments: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01"/><path d="M18 12h.01"/>',
   reports: '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+  finance: '<path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/>',
   audit: '<path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"/><path d="M8 11h8"/><path d="M8 15h8"/><path d="M8 19h5"/>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/>',
   locations: '<path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
@@ -143,7 +147,7 @@ function enhanceTableFilters() {
   });
 }
 
-const RENDER = { dashboard, books, stock, transfers: renderTransfers, returns: renderReturns, pos, payments, reports, audit, users, locations };
+const RENDER = { dashboard, books, stock, transfers: renderTransfers, purchases, returns: renderReturns, pos, payments, reports, finance, audit, users, locations };
 
 function renderCurrentTab() {
   return RENDER[state.activeTab]().then(() => {
@@ -722,6 +726,7 @@ function canManageBooks() { return hasAnyRole('super_admin', 'zone_admin'); }
 
 async function books() {
   const canEdit = canManageBooks();
+  const showCost = state.user.role !== 'distributor';
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="toolbar">
@@ -730,7 +735,7 @@ async function books() {
       </div>
       ${canEdit ? '' : '<p class="hint">Only Super Admin and Zone Admin accounts can add or edit books.</p>'}
       <table>
-        <tr><th>Title</th><th>Barcode</th><th>ISBN</th><th>Language</th><th>Publication</th><th>Price</th>${canEdit ? '<th>Actions</th>' : ''}</tr>
+        <tr><th>Title</th><th>Barcode</th><th>ISBN</th><th>Language</th><th>Publication</th><th>Price</th>${showCost ? '<th>Cost</th>' : ''}${canEdit ? '<th>Actions</th>' : ''}</tr>
         <tbody id="bookRows"></tbody>
       </table>
     </div>`;
@@ -753,15 +758,17 @@ async function loadBookRows() {
   const rows = await api('/api/books' + (bookQuery ? '?q=' + encodeURIComponent(bookQuery) : ''));
   state.books = rows;
   const canEdit = canManageBooks();
+  const showCost = state.user.role !== 'distributor';
   const body = document.getElementById('bookRows');
   if (!body) return;
   body.innerHTML = rows.map(b => {
     const hl = b.barcode === (scanDb.get('last')?.barcode);
     return `<tr class="clickable-row${hl ? ' hl' : ''}" onclick="rowOpen(event, 'bookRowOpen', ${b.id})">
     <td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${esc(b.isbn || '')}</td><td>${esc(b.language || '')}</td><td>${esc(b.publication || '')}</td><td>&#8377;${b.price}</td>
+    ${showCost ? `<td>${Number(b.cost_price || 0) > 0 ? '&#8377;' + Number(b.cost_price).toFixed(2) : '<span class="hint">not set</span>'}</td>` : ''}
     ${canEdit ? `<td><button class="action" onclick="bookForm(${b.id})">Edit</button><button class="danger" onclick="bookDelete(${b.id})">Delete</button></td>` : ''}
   </tr>`;
-  }).join('') || `<tr><td colspan="${canEdit ? 7 : 6}" class="hint">No books found.</td></tr>`;
+  }).join('') || `<tr><td colspan="${6 + (showCost ? 1 : 0) + (canEdit ? 1 : 0)}" class="hint">No books found.</td></tr>`;
   enhanceTableFilters();
 }
 
@@ -780,6 +787,7 @@ function bookDetail(bookId) {
       <tr><th>Language</th><td>${esc(b.language || '—')}</td></tr>
       <tr><th>Publication</th><td>${esc(b.publication || '—')}</td></tr>
       <tr><th>Price</th><td>&#8377;${b.price}</td></tr>
+      ${b.cost_price !== undefined ? `<tr><th>Cost</th><td>&#8377;${Number(b.cost_price || 0).toFixed(2)}</td></tr>` : ''}
     </table></div>
     <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
 }
@@ -794,6 +802,7 @@ function bookForm(bookId = null) {
       <div class="form-row"><label>Language</label><input id="bkLang" value="${esc(b?.language || '')}"></div>
       <div class="form-row"><label>Publication</label><input id="bkPub" placeholder="e.g. Bhaktivedanta Book Trust (BBT)" value="${esc(b?.publication || '')}"></div>
       <div class="form-row"><label>Price (&#8377;)</label><input id="bkPrice" type="number" min="0" value="${b?.price ?? 0}"></div>
+      <div class="form-row"><label>Cost price (&#8377;)</label><input id="bkCost" type="number" min="0" step="0.01" value="${b?.cost_price ?? 0}"><span class="hint">What one copy costs you. Used for profit reports; purchases update it automatically.</span></div>
     </div>
     <button class="primary" onclick="bookSave(${b ? b.id : 'null'})">${b ? 'Save changes' : 'Create book'}</button>`);
 }
@@ -806,6 +815,7 @@ async function bookSave(bookId) {
     language: document.getElementById('bkLang').value.trim() || null,
     publication: document.getElementById('bkPub').value.trim() || null,
     price: Number(document.getElementById('bkPrice').value) || 0,
+    cost_price: Number(document.getElementById('bkCost').value) || 0,
   };
   if (!body.title || !body.barcode) { toast('Title and barcode are required', 'error'); return; }
   try {
@@ -2497,16 +2507,25 @@ async function invoiceDetail(invoiceId) {
       <td>${esc(p.note || '—')}</td>
       <td>&#8377;${Number(p.amount).toFixed(2)}</td>
     </tr>`).join('') || '<tr><td colspan="5" class="hint">No payments recorded yet.</td></tr>';
+  const hasLocation = inv.latitude != null && inv.longitude != null
+    && Number.isFinite(Number(inv.latitude)) && Number.isFinite(Number(inv.longitude));
+  const mapUrl = hasLocation
+    ? `https://www.google.com/maps?q=${Number(inv.latitude)},${Number(inv.longitude)}`
+    : '';
   openModal(`<h3>Invoice ${esc(inv.invoice_number)}</h3>
     <div class="table-scroll"><table>
       <tr><th>Date</th><td>${esc(formatAuditTime(inv.created_at))}</td></tr>
       <tr><th>Customer</th><td>${esc(inv.customer_name || '—')}${inv.customer_phone ? ' · ' + esc(inv.customer_phone) : ''}</td></tr>
       <tr><th>Billed by</th><td>${esc(inv.cashier_name || '—')} · ${esc(inv.location_name)}</td></tr>
+      <tr><th>Bill area</th><td>${hasLocation
+        ? `${esc(inv.area_name || 'Area name unavailable')} · <a href="${mapUrl}" target="_blank" rel="noopener noreferrer">View on map</a>`
+        : 'Not captured'}</td></tr>
       ${inv.distributor_name ? `<tr><th>Distributor</th><td>${esc(inv.distributor_name)} (due to zone)</td></tr>` : ''}
       <tr><th>Payment</th><td>${esc(inv.payment_mode.toUpperCase())}${inv.payment_ref ? ' · ' + esc(inv.payment_ref) : ''}</td></tr>
       <tr><th>Status</th><td><span class="badge ${esc(inv.status)}">${esc(invoiceStatusLabel(inv))}</span></td></tr>
       ${inv.handed_over ? '<tr><th>Cash handover</th><td>Included in a payment-in receipt</td></tr>' : ''}
     </table></div>
+    <p class="hint">Area details by <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>.</p>
     <h4>Items</h4>
     <div class="table-scroll"><table>
       <tr><th>Title</th><th>Barcode</th><th>Qty</th><th>Price</th><th>Total</th></tr>
@@ -3314,6 +3333,416 @@ async function printPayment(paymentId) {
     try { w.close(); } catch (_) {}
     toast(e.message, 'error');
   }
+}
+
+/* ---- Purchases: book inward bills ---- */
+let purchaseRows = [];
+let purchaseLocs = [];
+let purchaseBooks = [];
+let purchaseFormItems = [];
+let purchaseFilter = { frm: '', to: '', location_id: '' };
+
+function localDateInput(date = new Date()) {
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function money(n) { return Number(n || 0).toFixed(2); }
+
+async function purchases() {
+  [purchaseLocs, purchaseBooks] = await Promise.all([api('/api/locations'), api('/api/books')]);
+  await loadPurchases();
+}
+
+async function loadPurchases() {
+  ['purFrom', 'purTo', 'purLoc'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === 'purFrom') purchaseFilter.frm = el.value;
+    if (id === 'purTo') purchaseFilter.to = el.value;
+    if (id === 'purLoc') purchaseFilter.location_id = el.value;
+  });
+  if (purchaseFilter.frm && purchaseFilter.to && purchaseFilter.frm > purchaseFilter.to) {
+    toast('From date cannot be after To date', 'error');
+    return;
+  }
+  const params = new URLSearchParams();
+  if (purchaseFilter.frm) params.set('frm', purchaseFilter.frm);
+  if (purchaseFilter.to) params.set('to', purchaseFilter.to);
+  if (purchaseFilter.location_id) params.set('location_id', purchaseFilter.location_id);
+  const query = params.toString();
+  purchaseRows = await api('/api/finance/purchases' + (query ? '?' + query : ''));
+  renderPurchases();
+}
+
+function renderPurchases() {
+  const bills = purchaseRows.length;
+  const value = purchaseRows.reduce((a, r) => a + Number(r.total || 0), 0);
+  const paid = purchaseRows.reduce((a, r) => a + Number(r.amount_paid || 0), 0);
+  const balance = purchaseRows.reduce((a, r) => a + Number(r.balance || 0), 0);
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      <h2>Purchases</h2>
+      <p class="hint">Record the bills you pay when books arrive. Each purchase adds stock and updates the book's landed cost, which drives the Profit &amp; Loss report.</p>
+      <div class="toolbar">
+        <label>From <input id="purFrom" type="date" value="${esc(purchaseFilter.frm)}"></label>
+        <label>To <input id="purTo" type="date" value="${esc(purchaseFilter.to)}"></label>
+        <select id="purLoc">
+          <option value="">All locations</option>
+          ${purchaseLocs.map(l => `<option value="${l.id}" ${String(l.id) === String(purchaseFilter.location_id) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
+        </select>
+        <button class="primary" onclick="loadPurchases()">Load</button>
+        <button class="action" onclick="purchaseForm()">+ Record purchase</button>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="num">${bills}</div><div class="lbl">Purchase bills</div></div>
+        <div class="stat"><div class="num">&#8377;${money(value)}</div><div class="lbl">Goods received (incl. freight)</div></div>
+        <div class="stat"><div class="num">&#8377;${money(paid)}</div><div class="lbl">Paid to suppliers</div></div>
+        <div class="stat"><div class="num">&#8377;${money(balance)}</div><div class="lbl">Still payable</div></div>
+      </div>
+      <div id="purchaseTable">${purchaseTableHtml()}</div>
+    </div>`;
+  enhanceTableFilters();
+}
+
+function purchaseTableHtml() {
+  if (!purchaseRows.length) return '<p class="hint">No purchase bills found for this period.</p>';
+  return `<table>
+    <tr><th>Date</th><th>Bill no.</th><th>Supplier</th><th>Location</th><th>Lines</th><th>Units</th><th>Total</th><th>Paid</th><th>Balance</th><th>Actions</th></tr>
+    ${purchaseRows.map(p => `<tr class="clickable-row" onclick="rowOpen(event, 'purchaseDetail', ${p.id})">
+      <td>${esc(p.purchase_date)}</td><td>${esc(p.bill_number || '—')}</td><td>${esc(p.supplier)}</td>
+      <td>${esc(p.location_name || '')}</td><td>${p.item_count}</td><td>${p.units}</td>
+      <td>&#8377;${money(p.total)}</td><td>&#8377;${money(p.amount_paid)}</td>
+      <td>${Number(p.balance) > 0 ? `<strong>&#8377;${money(p.balance)}</strong>` : '&#8377;0.00'}</td>
+      <td><button class="action" onclick="event.stopPropagation(); purchaseDetail(${p.id})">View</button>
+          <button class="danger" onclick="event.stopPropagation(); purchaseDelete(${p.id})">Delete</button></td>
+    </tr>`).join('')}
+  </table>`;
+}
+
+async function purchaseDetail(purchaseId) {
+  let p;
+  try { p = await api('/api/finance/purchases/' + purchaseId); }
+  catch (e) { toast(e.message, 'error'); return; }
+  openModal(`<h3>Purchase bill ${esc(p.bill_number || '#' + p.id)}</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Supplier</th><td>${esc(p.supplier)}</td></tr>
+      <tr><th>Date</th><td>${esc(p.purchase_date)}</td></tr>
+      <tr><th>Location</th><td>${esc(p.location_name || '')}</td></tr>
+      <tr><th>Payment</th><td>${esc(String(p.payment_mode || '').toUpperCase())}</td></tr>
+      ${p.note ? `<tr><th>Note</th><td>${esc(p.note)}</td></tr>` : ''}
+    </table></div>
+    <h4>Books</h4>
+    <div class="table-scroll"><table>
+      <tr><th>Book</th><th>Qty</th><th>Unit cost</th><th>Landed cost</th><th>Line total</th></tr>
+      ${p.items.map(i => `<tr><td>${esc(i.title)}<span class="cart-book-barcode">${esc(i.barcode)}</span></td>
+        <td>${i.qty}</td><td>&#8377;${money(i.unit_cost)}</td><td>&#8377;${money(i.landed_unit_cost)}</td><td>&#8377;${money(i.line_total)}</td></tr>`).join('')}
+    </table></div>
+    <div class="table-scroll"><table>
+      <tr><th>Subtotal</th><td>&#8377;${money(p.subtotal)}</td></tr>
+      <tr><th>Freight</th><td>&#8377;${money(p.freight)}</td></tr>
+      <tr><th>Discount</th><td>&#8377;${money(p.discount)}</td></tr>
+      <tr><th>Total</th><td><strong>&#8377;${money(p.total)}</strong></td></tr>
+      <tr><th>Paid</th><td>&#8377;${money(p.amount_paid)}</td></tr>
+      <tr><th>Balance</th><td>&#8377;${money(p.balance)}</td></tr>
+    </table></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action" onclick="closeModal()">Close</button></div>`);
+}
+
+async function purchaseDelete(purchaseId) {
+  if (!confirm('Delete this purchase bill and reverse its stock? This only works while the stock is still here.')) return;
+  try {
+    await api('/api/finance/purchases/' + purchaseId, { method: 'DELETE' });
+    toast('Purchase bill deleted', 'success');
+    loadPurchases();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function purchaseForm() {
+  purchaseFormItems = [{ book_id: '', qty: 1, unit_cost: 0 }];
+  const warehouses = purchaseLocs.filter(l => l.type === 'warehouse');
+  const defaultLoc = warehouses[0] || purchaseLocs[0];
+  openModal(`<h3>Record purchase</h3>
+    <p class="hint">The bill value is put into stock. Freight and discount are spread across the books to get the landed cost.</p>
+    <div class="form-grid">
+      <div class="form-row"><label>Supplier *</label><input id="purSupplier" placeholder="e.g. Bhaktivedanta Book Trust"></div>
+      <div class="form-row"><label>Supplier bill no.</label><input id="purBill" placeholder="e.g. BBT/1234"></div>
+      <div class="form-row"><label>Purchase date *</label><input id="purDate" type="date" value="${localDateInput()}"></div>
+      <div class="form-row"><label>Receive at</label><select id="purLocation">${purchaseLocs.map(l => `<option value="${l.id}" ${defaultLoc && l.id === defaultLoc.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Freight (&#8377;)</label><input id="purFreight" type="number" min="0" step="0.01" value="0" oninput="purchaseFormTotalsUpdate()"></div>
+      <div class="form-row"><label>Discount (&#8377;)</label><input id="purDiscount" type="number" min="0" step="0.01" value="0" oninput="purchaseFormTotalsUpdate()"></div>
+      <div class="form-row"><label>Paid now (&#8377;)</label><input id="purPaid" type="number" min="0" step="0.01" value="0"></div>
+      <div class="form-row"><label>Payment mode</label><select id="purMode"><option value="credit">Credit (pay later)</option><option value="cash">Cash</option><option value="upi">UPI</option><option value="card">Card</option></select></div>
+    </div>
+    <div id="purchaseRows"></div>
+    <button class="action" onclick="purchaseFormAddRow()">+ Add book</button>
+    <div id="purchaseTotals" class="hint" style="margin-top:10px"></div>
+    <div class="form-row"><label>Note</label><input id="purNote"></div>
+    <button class="primary" onclick="purchaseFormSubmit()">Save purchase</button>`);
+  purchaseFormRenderRows();
+}
+
+function purchaseFormRenderRows() {
+  const rows = document.getElementById('purchaseRows');
+  if (!rows) return;
+  rows.innerHTML = purchaseFormItems.map((it, i) => `
+    <div class="cart-item" style="margin-bottom:8px;flex-wrap:wrap">
+      <select style="flex:1;min-width:180px" onchange="purchaseFormSet(${i},'book_id',this.value)">
+        <option value="">Select book</option>
+        ${purchaseBooks.map(b => `<option value="${b.id}" ${String(b.id) === String(it.book_id) ? 'selected' : ''}>${esc(b.title)} (${esc(b.barcode)})</option>`).join('')}
+      </select>
+      <input type="number" min="1" value="${it.qty}" title="Quantity" style="width:80px" onchange="purchaseFormSet(${i},'qty',this.value)">
+      <input type="number" min="0" step="0.01" value="${it.unit_cost}" title="Unit cost" style="width:100px" onchange="purchaseFormSet(${i},'unit_cost',this.value)">
+      <button class="danger" onclick="purchaseFormDel(${i})">x</button>
+    </div>`).join('');
+  purchaseFormTotalsUpdate();
+}
+
+function purchaseFormSet(i, key, val) {
+  if (!purchaseFormItems[i]) return;
+  if (key === 'book_id') {
+    purchaseFormItems[i].book_id = val ? Number(val) : '';
+    const book = purchaseBooks.find(b => b.id === purchaseFormItems[i].book_id);
+    if (book && !Number(purchaseFormItems[i].unit_cost)) {
+      purchaseFormItems[i].unit_cost = Number(book.cost_price || 0);
+    }
+  } else {
+    purchaseFormItems[i][key] = Number(val) || 0;
+  }
+  purchaseFormRenderRows();
+}
+
+function purchaseFormAddRow() { purchaseFormItems.push({ book_id: '', qty: 1, unit_cost: 0 }); purchaseFormRenderRows(); }
+function purchaseFormDel(i) { purchaseFormItems.splice(i, 1); purchaseFormRenderRows(); }
+
+function purchaseFormTotalsUpdate() {
+  const el = document.getElementById('purchaseTotals');
+  if (!el) return;
+  const subtotal = purchaseFormItems.reduce((a, it) => a + (Number(it.qty) || 0) * (Number(it.unit_cost) || 0), 0);
+  const freight = Number(document.getElementById('purFreight')?.value) || 0;
+  const discount = Number(document.getElementById('purDiscount')?.value) || 0;
+  const total = subtotal - discount + freight;
+  el.innerHTML = `Subtotal <strong>&#8377;${money(subtotal)}</strong> &middot; Freight &#8377;${money(freight)} &middot; Discount &#8377;${money(discount)} &middot; Bill total <strong>&#8377;${money(total)}</strong>`;
+}
+
+async function purchaseFormSubmit() {
+  const items = purchaseFormItems
+    .filter(i => i.book_id && Number(i.qty) > 0)
+    .map(i => ({ book_id: Number(i.book_id), qty: Number(i.qty), unit_cost: Number(i.unit_cost) || 0 }));
+  if (!items.length) { toast('Add at least one book', 'error'); return; }
+  const body = {
+    supplier: document.getElementById('purSupplier').value.trim(),
+    bill_number: document.getElementById('purBill').value.trim() || null,
+    location_id: Number(document.getElementById('purLocation').value),
+    purchase_date: document.getElementById('purDate').value,
+    freight: Number(document.getElementById('purFreight').value) || 0,
+    discount: Number(document.getElementById('purDiscount').value) || 0,
+    amount_paid: Number(document.getElementById('purPaid').value) || 0,
+    payment_mode: document.getElementById('purMode').value,
+    note: document.getElementById('purNote').value.trim() || null,
+    items,
+  };
+  if (!body.supplier) { toast('Supplier is required', 'error'); return; }
+  if (!body.purchase_date) { toast('Purchase date is required', 'error'); return; }
+  try {
+    const res = await api('/api/finance/purchases', { method: 'POST', body });
+    closeModal();
+    toast(`Purchase saved: ${res.units} books for ${money(res.total)}`, 'success');
+    loadPurchases();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/* ---- Profit & Loss ---- */
+let plReport = null;
+let plLocs = [];
+let expenseRows = [];
+let plFilter = { frm: '', to: '', location_id: '' };
+
+const EXPENSE_CATEGORIES = ['Rent', 'Salary', 'Transport', 'Printing', 'Programme', 'Utilities', 'Office', 'Marketing', 'Other'];
+
+function monthStartInput() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+async function finance() {
+  plLocs = await api('/api/locations');
+  if (!plFilter.frm) plFilter.frm = monthStartInput();
+  if (!plFilter.to) plFilter.to = localDateInput();
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      <h2>Profit &amp; Loss</h2>
+      <p class="hint">Sales minus what those books cost, minus running expenses. Purchases add stock, not expenses; the cost is counted when a book is sold.</p>
+      <div class="toolbar">
+        <label>From <input id="plFrom" type="date" value="${esc(plFilter.frm)}"></label>
+        <label>To <input id="plTo" type="date" value="${esc(plFilter.to)}"></label>
+        <select id="plLoc">
+          <option value="">All locations</option>
+          ${plLocs.map(l => `<option value="${l.id}" ${String(l.id) === String(plFilter.location_id) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
+        </select>
+        <button class="primary" onclick="loadProfitLoss(true)">Load report</button>
+        <button class="action" onclick="expenseForm()">+ Add expense</button>
+      </div>
+      <div id="plSummary"><p class="hint">Loading…</p></div>
+    </div>
+    <div id="plExpenses"></div>`;
+  await loadProfitLoss(true);
+}
+
+async function loadProfitLoss(reloadExpenses = false) {
+  ['plFrom', 'plTo', 'plLoc'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === 'plFrom') plFilter.frm = el.value;
+    if (id === 'plTo') plFilter.to = el.value;
+    if (id === 'plLoc') plFilter.location_id = el.value;
+  });
+  if (plFilter.frm && plFilter.to && plFilter.frm > plFilter.to) {
+    toast('From date cannot be after To date', 'error');
+    return;
+  }
+  const params = new URLSearchParams();
+  if (plFilter.frm) params.set('frm', plFilter.frm);
+  if (plFilter.to) params.set('to', plFilter.to);
+  if (plFilter.location_id) params.set('location_id', plFilter.location_id);
+  try {
+    plReport = await api('/api/reports/profit-loss?' + params.toString());
+    renderProfitLoss();
+    if (reloadExpenses) await loadExpenses();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function profitClass(value) { return Number(value) < 0 ? 'style="color:#b42318"' : ''; }
+
+function renderProfitLoss() {
+  const r = plReport;
+  if (!r) return;
+  const missing = r.missing_cost_books || [];
+  const missingHtml = missing.length ? `<div class="card">
+      <h2>Cost price missing</h2>
+      <p class="hint">These books sold in this period but have no cost price, so their profit is overstated. Set the cost on the Books tab, or record a purchase.</p>
+      <table><tr><th>Book</th><th>Barcode</th><th>Units sold</th></tr>
+        ${missing.map(b => `<tr><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${b.units}</td></tr>`).join('')}
+      </table>
+    </div>` : '';
+  const locations = r.locations || [];
+  const books = r.books || [];
+  const categories = r.expenses.by_category || [];
+  document.getElementById('plSummary').innerHTML = `
+    <div class="stats">
+      <div class="stat"><div class="num">&#8377;${money(r.revenue.net_revenue)}</div><div class="lbl">Net sales</div></div>
+      <div class="stat"><div class="num">&#8377;${money(r.cogs)}</div><div class="lbl">Cost of books sold</div></div>
+      <div class="stat"><div class="num" ${profitClass(r.gross_profit)}>&#8377;${money(r.gross_profit)}</div><div class="lbl">Gross profit (${money(r.gross_margin_pct)}%)</div></div>
+      <div class="stat"><div class="num">&#8377;${money(r.expenses.total)}</div><div class="lbl">Operating expenses</div></div>
+      <div class="stat"><div class="num" ${profitClass(r.net_profit)}>&#8377;${money(r.net_profit)}</div><div class="lbl">Net profit (${money(r.net_margin_pct)}%)</div></div>
+    </div>
+    <h3>Summary</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Gross sales</th><td>&#8377;${money(r.revenue.gross_sales)}</td></tr>
+      <tr><th>Less discounts</th><td>&#8377;${money(r.revenue.discounts)}</td></tr>
+      <tr><th>Net sales</th><td><strong>&#8377;${money(r.revenue.net_revenue)}</strong> <span class="hint">(${r.revenue.invoice_count} bills)</span></td></tr>
+      <tr><th>Cost of books sold</th><td>&#8377;${money(r.cogs)}</td></tr>
+      <tr><th>Gross profit</th><td><strong>&#8377;${money(r.gross_profit)}</strong></td></tr>
+      <tr><th>Operating expenses</th><td>&#8377;${money(r.expenses.total)}</td></tr>
+      <tr><th>Damaged / written off</th><td>&#8377;${money(r.stock_loss.damaged_value)} <span class="hint">(${r.stock_loss.damaged_units} copies)</span></td></tr>
+      <tr><th>Net profit</th><td><strong ${profitClass(r.net_profit)}>&#8377;${money(r.net_profit)}</strong></td></tr>
+    </table></div>
+    ${missingHtml}
+    <div class="card"><h2>By location</h2>
+      <table><tr><th>Location</th><th>Sales</th><th>Book cost</th><th>Gross profit</th><th>Expenses</th><th>Stock loss</th><th>Net profit</th></tr>
+        ${locations.map(l => `<tr><td>${esc(l.location_name)}</td><td>&#8377;${money(l.revenue)}</td><td>&#8377;${money(l.cogs)}</td><td>&#8377;${money(l.gross_profit)}</td><td>&#8377;${money(l.expenses)}</td><td>&#8377;${money(l.stock_loss)}</td><td><strong ${profitClass(l.net_profit)}>&#8377;${money(l.net_profit)}</strong></td></tr>`).join('') || '<tr><td colspan="7" class="hint">No location activity in this period.</td></tr>'}
+      </table></div>
+    <div class="card"><h2>By book</h2>
+      <table><tr><th>Book</th><th>Barcode</th><th>Units</th><th>Revenue</th><th>Book cost</th><th>Gross profit</th><th>Margin</th></tr>
+        ${books.map(b => `<tr><td>${esc(b.title)}</td><td>${esc(b.barcode)}</td><td>${b.qty_sold}</td><td>&#8377;${money(b.revenue)}</td><td>&#8377;${money(b.cogs)}</td><td>&#8377;${money(b.gross_profit)}</td><td>${money(b.margin_pct)}%</td></tr>`).join('') || '<tr><td colspan="7" class="hint">No sales in this period.</td></tr>'}
+      </table></div>
+    <div class="card"><h2>Purchases in this period</h2>
+      <p class="hint">These are stock purchases, not expenses. They only affect profit through the cost of books sold.</p>
+      <div class="stats">
+        <div class="stat"><div class="num">${r.purchases.bills}</div><div class="lbl">Bills</div></div>
+        <div class="stat"><div class="num">&#8377;${money(r.purchases.value)}</div><div class="lbl">Goods received</div></div>
+        <div class="stat"><div class="num">&#8377;${money(r.purchases.paid)}</div><div class="lbl">Paid</div></div>
+        <div class="stat"><div class="num">&#8377;${money(r.purchases.balance)}</div><div class="lbl">Payable</div></div>
+      </div>
+    </div>`;
+}
+
+async function loadExpenses() {
+  const params = new URLSearchParams();
+  if (plFilter.frm) params.set('frm', plFilter.frm);
+  if (plFilter.to) params.set('to', plFilter.to);
+  if (plFilter.location_id) params.set('location_id', plFilter.location_id);
+  expenseRows = await api('/api/finance/expenses?' + params.toString());
+  renderExpenses();
+}
+
+function renderExpenses() {
+  const target = document.getElementById('plExpenses');
+  if (!target) return;
+  const categories = (plReport?.expenses?.by_category) || [];
+  const total = expenseRows.reduce((a, e) => a + Number(e.amount || 0), 0);
+  target.innerHTML = `<div class="card">
+    <h2>Operating expenses</h2>
+    <p class="hint">Rent, salaries, travel and other running costs for the selected period.</p>
+    <div class="toolbar"><button class="primary" onclick="expenseForm()">+ Add expense</button></div>
+    <div class="stats">
+      <div class="stat"><div class="num">&#8377;${money(total)}</div><div class="lbl">Expenses shown</div></div>
+      <div class="stat"><div class="num">${expenseRows.length}</div><div class="lbl">Entries</div></div>
+    </div>
+    ${categories.length ? `<div class="table-scroll"><table><tr><th>Category</th><th>Amount</th></tr>${categories.map(c => `<tr><td>${esc(c.category)}</td><td>&#8377;${money(c.amount)}</td></tr>`).join('')}</table></div>` : ''}
+    <div class="table-scroll"><table>
+      <tr><th>Date</th><th>Category</th><th>Location</th><th>Vendor</th><th>Amount</th><th>Note</th><th></th></tr>
+      ${expenseRows.map(e => `<tr>
+        <td>${esc(e.expense_date)}</td><td>${esc(e.category)}</td><td>${esc(e.location_name || 'Global')}</td>
+        <td>${esc(e.vendor || '—')}</td><td>&#8377;${money(e.amount)}</td><td>${esc(e.note || '')}</td>
+        <td><button class="danger" onclick="expenseDelete(${e.id})">Delete</button></td>
+      </tr>`).join('') || '<tr><td colspan="7" class="hint">No expenses recorded for this period.</td></tr>'}
+    </table></div>
+  </div>`;
+  enhanceTableFilters();
+}
+
+function expenseForm() {
+  const canGlobal = hasAnyRole('super_admin', 'temple');
+  openModal(`<h3>Add expense</h3>
+    <div class="form-grid">
+      <div class="form-row"><label>Date *</label><input id="expDate" type="date" value="${localDateInput()}"></div>
+      <div class="form-row"><label>Category *</label><select id="expCategory">${EXPENSE_CATEGORIES.map(c => `<option>${esc(c)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Amount (&#8377;) *</label><input id="expAmount" type="number" min="0.01" step="0.01"></div>
+      <div class="form-row"><label>Location</label><select id="expLocation">${canGlobal ? '<option value="">Global (not tied to a location)</option>' : ''}${plLocs.map(l => `<option value="${l.id}" ${String(l.id) === String(state.user.zone_id) ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Paid to / vendor</label><input id="expVendor"></div>
+    </div>
+    <div class="form-row"><label>Note</label><input id="expNote"></div>
+    <button class="primary" onclick="expenseSave()">Save expense</button>`);
+}
+
+async function expenseSave() {
+  const location = document.getElementById('expLocation').value;
+  const body = {
+    expense_date: document.getElementById('expDate').value,
+    category: document.getElementById('expCategory').value,
+    amount: Number(document.getElementById('expAmount').value) || 0,
+    location_id: location ? Number(location) : null,
+    vendor: document.getElementById('expVendor').value.trim() || null,
+    note: document.getElementById('expNote').value.trim() || null,
+  };
+  if (!body.expense_date) { toast('Expense date is required', 'error'); return; }
+  if (body.amount <= 0) { toast('Enter an amount greater than zero', 'error'); return; }
+  try {
+    await api('/api/finance/expenses', { method: 'POST', body });
+    closeModal();
+    toast('Expense saved', 'success');
+    await loadProfitLoss(true);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function expenseDelete(expenseId) {
+  if (!confirm('Delete this expense?')) return;
+  try {
+    await api('/api/finance/expenses/' + expenseId, { method: 'DELETE' });
+    toast('Expense deleted', 'success');
+    await loadProfitLoss(true);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function reports() {

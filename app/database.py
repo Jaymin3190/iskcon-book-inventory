@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS books (
     language TEXT,
     publication TEXT,
     price NUMERIC NOT NULL DEFAULT 0,
+    cost_price NUMERIC NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -161,6 +162,7 @@ CREATE TABLE IF NOT EXISTS invoice_items (
     book_id INTEGER NOT NULL REFERENCES books(id),
     qty INTEGER NOT NULL,
     unit_price NUMERIC NOT NULL,
+    unit_cost NUMERIC NOT NULL DEFAULT 0,
     line_total NUMERIC NOT NULL
 );
 
@@ -205,6 +207,45 @@ CREATE TABLE IF NOT EXISTS cash_submission_items (
     invoice_id INTEGER NOT NULL REFERENCES invoices(id),
     invoice_number TEXT NOT NULL,
     amount NUMERIC NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bill_number TEXT,
+    supplier TEXT NOT NULL,
+    location_id INTEGER NOT NULL REFERENCES locations(id),
+    purchase_date TEXT NOT NULL,
+    subtotal NUMERIC NOT NULL DEFAULT 0,
+    freight NUMERIC NOT NULL DEFAULT 0,
+    discount NUMERIC NOT NULL DEFAULT 0,
+    total NUMERIC NOT NULL DEFAULT 0,
+    amount_paid NUMERIC NOT NULL DEFAULT 0,
+    payment_mode TEXT NOT NULL DEFAULT 'credit',
+    note TEXT,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS purchase_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_id INTEGER NOT NULL REFERENCES purchases(id),
+    book_id INTEGER NOT NULL REFERENCES books(id),
+    qty INTEGER NOT NULL,
+    unit_cost NUMERIC NOT NULL,
+    landed_unit_cost NUMERIC NOT NULL DEFAULT 0,
+    line_total NUMERIC NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    expense_date TEXT NOT NULL,
+    category TEXT NOT NULL,
+    amount NUMERIC NOT NULL,
+    location_id INTEGER REFERENCES locations(id),
+    vendor TEXT,
+    note TEXT,
+    created_by INTEGER REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -323,6 +364,30 @@ def _migrate_invoice_location(conn):
     ):
         if column not in columns:
             conn.execute(f"ALTER TABLE invoices ADD COLUMN {column} {definition}")
+
+
+def _migrate_cost_tracking(conn):
+    """Add landed cost to the catalogue and a cost snapshot to every sale line.
+
+    The snapshot is what makes profit history stable: changing a book's cost
+    price later must not rewrite last month's gross profit. Old sale lines keep
+    a zero snapshot and the report falls back to the current book cost.
+    """
+    book_columns = {row[1] for row in conn.execute("PRAGMA table_info(books)")}
+    if "cost_price" not in book_columns:
+        conn.execute("ALTER TABLE books ADD COLUMN cost_price NUMERIC NOT NULL DEFAULT 0")
+    item_columns = {row[1] for row in conn.execute("PRAGMA table_info(invoice_items)")}
+    if "unit_cost" not in item_columns:
+        conn.execute("ALTER TABLE invoice_items ADD COLUMN unit_cost NUMERIC NOT NULL DEFAULT 0")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_purchases_location_date ON purchases(location_id, purchase_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_purchase_items_book ON purchase_items(book_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_expenses_location_date ON expenses(location_id, expense_date)"
+    )
 
 
 def _migrate_invoice_payments(conn):
@@ -453,6 +518,7 @@ def init_db():
     _migrate_invoice_share_tokens(conn)
     _migrate_invoice_distributor(conn)
     _migrate_invoice_location(conn)
+    _migrate_cost_tracking(conn)
     _migrate_invoice_payments(conn)
     _migrate_distributor_online_bills(conn)
     _migrate_cash_submission_items(conn)

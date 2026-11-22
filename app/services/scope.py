@@ -61,6 +61,29 @@ def invoice_location_ids(db, user) -> set:
     return zone_location_ids(db, user["zone_id"])
 
 
+def finance_location_ids(db, user) -> set:
+    """Locations whose money a user may see in Profit & Loss and purchases.
+
+    Super admins see everything. A temple admin is based at the warehouse, so
+    they see that warehouse and every zone beneath it. A zone admin sees only
+    their own zone tree.
+    """
+    if user["role"] == "super_admin":
+        rows = db.execute("SELECT id FROM locations").fetchall()
+        return {r["id"] for r in rows}
+    if not user["zone_id"]:
+        return {None}
+    if user["role"] == "temple":
+        row = db.execute(
+            "SELECT parent_id FROM locations WHERE id = ?", (user["zone_id"],)
+        ).fetchone()
+        warehouse_id = row["parent_id"] if row and row["parent_id"] else user["zone_id"]
+        return zone_location_ids(db, warehouse_id)
+    if user["role"] == "distributor":
+        return {user["zone_id"]}
+    return zone_location_ids(db, user["zone_id"])
+
+
 def payment_zone_ids(db, user) -> set:
     """Zones whose cash a user may receive from, or review handovers for.
 

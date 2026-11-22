@@ -55,8 +55,8 @@ def seed():
 
     for title, isbn, barcode, lang, publication, price in BOOKS:
         c.execute(
-            "INSERT INTO books (title, isbn, barcode, language, publication, price) VALUES (?,?,?,?,?,?)",
-            (title, isbn, barcode, lang, publication, price),
+            "INSERT INTO books (title, isbn, barcode, language, publication, price, cost_price) VALUES (?,?,?,?,?,?,?)",
+            (title, isbn, barcode, lang, publication, price, round(price * 0.6, 2)),
         )
 
     for username, pwd, name, role, zone_id in USERS:

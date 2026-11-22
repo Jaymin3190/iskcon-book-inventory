@@ -5,7 +5,13 @@ from pydantic import BaseModel
 
 from ..auth import has_role, require_roles
 from ..database import get_db
-from ..services.scope import invoice_location_ids, location_ids, stock_location_ids, zone_location_ids
+from ..services.scope import (
+    finance_location_ids,
+    invoice_location_ids,
+    location_ids,
+    stock_location_ids,
+    zone_location_ids,
+)
 from ..services.timezone import now_ist
 
 router = APIRouter(tags=["reports"])
@@ -112,6 +118,285 @@ def sales_by_book(frm: str = None, to: str = None, location_id: int = None, db=D
         params.append(to + " 23:59:59")
     sql += " GROUP BY b.id ORDER BY revenue DESC"
     return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
+@router.get("/api/reports/profit-loss")
+def profit_loss_report(
+    frm: str = None,
+    to: str = None,
+    location_id: int = None,
+    db=Depends(get_db),
+    user=Depends(require_roles("super_admin", "zone_admin", "temple")),
+):
+    """Revenue, cost of goods sold, running expenses and the resulting profit.
+
+    Purchases are deliberately *not* an expense here: buying books only moves
+    value from cash into stock. The cost becomes an expense only when a copy is
+    sold (COGS), damaged or written off.
+    """
+    def money(value):
+        return round(float(value or 0), 2)
+
+    def pct(part, whole):
+        return round(part / whole * 100, 2) if whole else 0.0
+
+    ids = finance_location_ids(db, user)
+    if location_id is not None:
+        if location_id not in ids:
+            raise HTTPException(403, "Forbidden")
+        ids = {location_id}
+    id_list = sorted(i for i in ids if i is not None)
+
+    def empty_report():
+        return {
+            "from": frm,
+            "to": to,
+            "revenue": {"invoice_count": 0, "gross_sales": 0, "discounts": 0,
+                        "net_revenue": 0},
+            "cogs": 0,
+            "gross_profit": 0,
+            "gross_margin_pct": 0,
+            "expenses": {"total": 0, "by_category": []},
+            "stock_loss": {"damaged_units": 0, "damaged_value": 0},
+            "net_profit": 0,
+            "net_margin_pct": 0,
+            "purchases": {"bills": 0, "value": 0, "paid": 0, "balance": 0},
+            "locations": [],
+            "books": [],
+            "missing_cost_books": [],
+        }
+
+    if not id_list:
+        return empty_report()
+
+    ph = ",".join("?" * len(id_list))
+    inv_where = f"i.location_id IN ({ph}) AND i.status IN ('paid','partial','unpaid')"
+    inv_params = list(id_list)
+    if frm:
+        inv_where += " AND datetime(i.created_at, '+5 hours', '+30 minutes') >= ?"
+        inv_params.append(frm)
+    if to:
+        inv_where += " AND datetime(i.created_at, '+5 hours', '+30 minutes') <= ?"
+        inv_params.append(to + " 23:59:59")
+
+    revenue_row = db.execute(
+        f"""SELECT COUNT(*) AS invoice_count,
+                   COALESCE(SUM(i.subtotal),0) AS gross_sales,
+                   COALESCE(SUM(i.discount),0) AS discounts,
+                   COALESCE(SUM(i.total),0) AS net_revenue
+              FROM invoices i WHERE {inv_where}""",
+        inv_params,
+    ).fetchone()
+
+    cost_expr = "ii.qty * CASE WHEN ii.unit_cost > 0 THEN ii.unit_cost ELSE COALESCE(b.cost_price,0) END"
+    cogs_row = db.execute(
+        f"""SELECT COALESCE(SUM({cost_expr}),0) AS cogs,
+                   COALESCE(SUM(CASE WHEN COALESCE(ii.unit_cost,0) <= 0
+                                           AND COALESCE(b.cost_price,0) <= 0
+                                     THEN ii.qty ELSE 0 END),0) AS uncosted_units
+              FROM invoice_items ii
+              JOIN invoices i ON i.id = ii.invoice_id
+              JOIN books b ON b.id = ii.book_id
+             WHERE {inv_where}""",
+        inv_params,
+    ).fetchone()
+
+    missing = db.execute(
+        f"""SELECT b.title, b.barcode, COALESCE(SUM(ii.qty),0) AS units
+              FROM invoice_items ii
+              JOIN invoices i ON i.id = ii.invoice_id
+              JOIN books b ON b.id = ii.book_id
+             WHERE {inv_where}
+               AND COALESCE(ii.unit_cost,0) <= 0
+               AND COALESCE(b.cost_price,0) <= 0
+             GROUP BY b.id ORDER BY units DESC""",
+        inv_params,
+    ).fetchall()
+
+    if location_id is not None:
+        expense_where = "e.location_id = ?"
+        expense_params = [location_id]
+    elif user["role"] in ("super_admin", "temple"):
+        expense_where = f"(e.location_id IN ({ph}) OR e.location_id IS NULL)"
+        expense_params = list(id_list)
+    else:
+        expense_where = f"e.location_id IN ({ph})"
+        expense_params = list(id_list)
+    if frm:
+        expense_where += " AND e.expense_date >= ?"
+        expense_params.append(frm)
+    if to:
+        expense_where += " AND e.expense_date <= ?"
+        expense_params.append(to)
+
+    expense_categories = db.execute(
+        f"""SELECT e.category, COALESCE(SUM(e.amount),0) AS amount
+              FROM expenses e WHERE {expense_where}
+             GROUP BY e.category ORDER BY amount DESC""",
+        expense_params,
+    ).fetchall()
+    expense_total = round(sum(float(r["amount"] or 0) for r in expense_categories), 2)
+
+    damaged_where = f"d.location_id IN ({ph})"
+    damaged_params = list(id_list)
+    if frm:
+        damaged_where += " AND datetime(d.created_at, '+5 hours', '+30 minutes') >= ?"
+        damaged_params.append(frm)
+    if to:
+        damaged_where += " AND datetime(d.created_at, '+5 hours', '+30 minutes') <= ?"
+        damaged_params.append(to + " 23:59:59")
+    damaged_row = db.execute(
+        f"""SELECT COALESCE(SUM(d.qty),0) AS units,
+                   COALESCE(SUM(d.qty * COALESCE(b.cost_price,0)),0) AS value
+              FROM damaged d JOIN books b ON b.id = d.book_id
+             WHERE {damaged_where}""",
+        damaged_params,
+    ).fetchone()
+
+    purchase_where = f"p.location_id IN ({ph})"
+    purchase_params = list(id_list)
+    if frm:
+        purchase_where += " AND p.purchase_date >= ?"
+        purchase_params.append(frm)
+    if to:
+        purchase_where += " AND p.purchase_date <= ?"
+        purchase_params.append(to)
+    purchase_row = db.execute(
+        f"""SELECT COUNT(*) AS bills, COALESCE(SUM(p.total),0) AS value,
+                   COALESCE(SUM(p.amount_paid),0) AS paid
+              FROM purchases p WHERE {purchase_where}""",
+        purchase_params,
+    ).fetchone()
+
+    # Per-location roll-up
+    location_names = {
+        r["id"]: r["name"]
+        for r in db.execute(
+            f"SELECT id, name FROM locations WHERE id IN ({ph})", id_list
+        ).fetchall()
+    }
+    by_location = {
+        lid: {"location_id": lid, "location_name": location_names.get(lid, ""),
+              "revenue": 0.0, "cogs": 0.0, "expenses": 0.0, "stock_loss": 0.0}
+        for lid in id_list
+    }
+
+    for row in db.execute(
+        f"""SELECT i.location_id, COALESCE(SUM(i.total),0) AS revenue
+              FROM invoices i WHERE {inv_where} GROUP BY i.location_id""",
+        inv_params,
+    ).fetchall():
+        if row["location_id"] in by_location:
+            by_location[row["location_id"]]["revenue"] = money(row["revenue"])
+
+    for row in db.execute(
+        f"""SELECT i.location_id, COALESCE(SUM({cost_expr}),0) AS cogs
+              FROM invoice_items ii
+              JOIN invoices i ON i.id = ii.invoice_id
+              JOIN books b ON b.id = ii.book_id
+             WHERE {inv_where} GROUP BY i.location_id""",
+        inv_params,
+    ).fetchall():
+        if row["location_id"] in by_location:
+            by_location[row["location_id"]]["cogs"] = money(row["cogs"])
+
+    for row in db.execute(
+        f"""SELECT e.location_id, COALESCE(SUM(e.amount),0) AS amount
+              FROM expenses e WHERE {expense_where} GROUP BY e.location_id""",
+        expense_params,
+    ).fetchall():
+        if row["location_id"] in by_location:
+            by_location[row["location_id"]]["expenses"] = money(row["amount"])
+
+    for row in db.execute(
+        f"""SELECT d.location_id, COALESCE(SUM(d.qty * COALESCE(b.cost_price,0)),0) AS value
+              FROM damaged d JOIN books b ON b.id = d.book_id
+             WHERE {damaged_where} GROUP BY d.location_id""",
+        damaged_params,
+    ).fetchall():
+        if row["location_id"] in by_location:
+            by_location[row["location_id"]]["stock_loss"] = money(row["value"])
+
+    locations = []
+    for row in by_location.values():
+        gross = round(row["revenue"] - row["cogs"], 2)
+        row["gross_profit"] = gross
+        row["net_profit"] = round(gross - row["expenses"] - row["stock_loss"], 2)
+        locations.append(row)
+    locations.sort(key=lambda r: r["net_profit"], reverse=True)
+
+    book_rows = db.execute(
+        f"""SELECT b.id AS book_id, b.title, b.barcode,
+                   COALESCE(SUM(ii.qty),0) AS qty_sold,
+                   COALESCE(SUM(ii.line_total),0) AS revenue,
+                   COALESCE(SUM({cost_expr}),0) AS cogs
+              FROM invoice_items ii
+              JOIN invoices i ON i.id = ii.invoice_id
+              JOIN books b ON b.id = ii.book_id
+             WHERE {inv_where}
+             GROUP BY b.id ORDER BY revenue DESC LIMIT 100""",
+        inv_params,
+    ).fetchall()
+    books = []
+    for row in book_rows:
+        revenue = money(row["revenue"])
+        cogs = money(row["cogs"])
+        profit = round(revenue - cogs, 2)
+        books.append({
+            "book_id": row["book_id"],
+            "title": row["title"],
+            "barcode": row["barcode"],
+            "qty_sold": int(row["qty_sold"] or 0),
+            "revenue": revenue,
+            "cogs": cogs,
+            "gross_profit": profit,
+            "margin_pct": pct(profit, revenue),
+        })
+
+    net_revenue = money(revenue_row["net_revenue"])
+    cogs = money(cogs_row["cogs"])
+    gross_profit = round(net_revenue - cogs, 2)
+    stock_loss = money(damaged_row["value"])
+    net_profit = round(gross_profit - expense_total - stock_loss, 2)
+
+    return {
+        "from": frm,
+        "to": to,
+        "revenue": {
+            "invoice_count": int(revenue_row["invoice_count"] or 0),
+            "gross_sales": money(revenue_row["gross_sales"]),
+            "discounts": money(revenue_row["discounts"]),
+            "net_revenue": net_revenue,
+        },
+        "cogs": cogs,
+        "gross_profit": gross_profit,
+        "gross_margin_pct": pct(gross_profit, net_revenue),
+        "expenses": {
+            "total": expense_total,
+            "by_category": [
+                {"category": r["category"], "amount": money(r["amount"])}
+                for r in expense_categories
+            ],
+        },
+        "stock_loss": {
+            "damaged_units": int(damaged_row["units"] or 0),
+            "damaged_value": stock_loss,
+        },
+        "net_profit": net_profit,
+        "net_margin_pct": pct(net_profit, net_revenue),
+        "purchases": {
+            "bills": int(purchase_row["bills"] or 0),
+            "value": money(purchase_row["value"]),
+            "paid": money(purchase_row["paid"]),
+            "balance": max(0, money(float(purchase_row["value"] or 0) - float(purchase_row["paid"] or 0))),
+        },
+        "locations": locations,
+        "books": books,
+        "missing_cost_books": [
+            {"title": r["title"], "barcode": r["barcode"], "units": int(r["units"] or 0)}
+            for r in missing
+        ],
+    }
 
 
 @router.get("/api/reports/distributor-sales")

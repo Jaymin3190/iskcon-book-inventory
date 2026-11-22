@@ -1265,5 +1265,86 @@ check("temple tally drops the online amount after the bill is removed", code == 
       and zone_after_upi.get("total_collected") == zone_before_tally.get("total_collected"),
       zone_after_upi)
 
+# --- finance: purchases, expenses and profit & loss ---
+code, pl_before = call("GET", "/api/reports/profit-loss?frm=2000-01-01&to=2100-01-01", token=super_t)
+check("profit and loss report loads", code == 200 and "net_profit" in pl_before, pl_before)
+
+code, fin_book = call("POST", "/api/books", token=super_t, body={
+    "title": "Finance Smoke Book", "barcode": "SMOKE-FIN-001", "price": 200,
+    "cost_price": 0,
+})
+check("costed book created", code == 200 and fin_book.get("id"), fin_book)
+fin_book_id = fin_book["id"]
+
+code, fin_purchase = call("POST", "/api/finance/purchases", token=super_t, body={
+    "supplier": "Smoke Supplier", "bill_number": "FIN-001", "location_id": 1,
+    "purchase_date": "2026-01-15", "freight": 100, "discount": 0,
+    "amount_paid": 500, "payment_mode": "cash",
+    "items": [{"book_id": fin_book_id, "qty": 10, "unit_cost": 100}],
+})
+check("purchase bill records goods and freight", code == 200
+      and fin_purchase["total"] == 1100 and fin_purchase["units"] == 10, fin_purchase)
+fin_purchase_id = fin_purchase["purchase_id"]
+
+_, fin_stock = call("GET", "/api/stock?location_id=1", token=super_t)
+check("purchase adds stock at the warehouse", qty(fin_stock, fin_book_id, 1) == 10, fin_stock)
+_, fin_catalogue = call("GET", "/api/books", token=super_t)
+fin_row = next((b for b in fin_catalogue if b["id"] == fin_book_id), {})
+check("purchase sets the landed cost", fin_row.get("cost_price") == 110, fin_row)
+_, dist_books = call("GET", "/api/books", token=dist_t)
+check("distributors cannot see cost prices",
+      all("cost_price" not in b for b in dist_books), dist_books[:1])
+
+code, _ = call("POST", "/api/finance/purchases", token=zone_t, body={
+    "supplier": "Nope", "location_id": 2, "purchase_date": "2026-01-15",
+    "items": [{"book_id": fin_book_id, "qty": 1, "unit_cost": 100}],
+})
+check("zone leader cannot record a purchase", code == 403)
+
+code, fin_sale = call("POST", "/api/pos/invoices", token=super_t, body={
+    "location_id": 1, "customer_name": "Finance Customer", "customer_phone": "9999999999",
+    "payment_mode": "cash", "items": [{"barcode": "SMOKE-FIN-001", "qty": 2}],
+})
+check("smoke sale uses the new book", code == 200 and fin_sale["total"] == 400, fin_sale)
+fin_sale_id = fin_sale["invoice_id"]
+
+code, fin_expense = call("POST", "/api/finance/expenses", token=super_t, body={
+    "expense_date": "2026-01-15", "category": "Rent", "amount": 50, "location_id": 1,
+})
+check("expense recorded", code == 200 and fin_expense.get("id"), fin_expense)
+fin_expense_id = fin_expense["id"]
+
+code, pl_after = call("GET", "/api/reports/profit-loss?frm=2000-01-01&to=2100-01-01", token=super_t)
+check("profit and loss counts the sale", code == 200
+      and round(pl_after["revenue"]["net_revenue"] - pl_before["revenue"]["net_revenue"], 2) == 400
+      and round(pl_after["cogs"] - pl_before["cogs"], 2) == 220, pl_after)
+check("profit and loss counts the expense",
+      round(pl_after["expenses"]["total"] - pl_before["expenses"]["total"], 2) == 50, pl_after)
+check("profit and loss calculates net profit", round(pl_after["net_profit"] - pl_before["net_profit"], 2) == 130)
+check("profit and loss lists the profitable book",
+      any(b["title"] == "Finance Smoke Book" and b["gross_profit"] == 180
+          for b in pl_after["books"]), pl_after.get("books"))
+check("profit and loss shows purchases as stock, not expenses",
+      pl_after["purchases"]["value"] - pl_before["purchases"]["value"] == 1100)
+
+code, _ = call("GET", "/api/reports/profit-loss", token=dist_t)
+check("distributors cannot read profit and loss", code == 403)
+
+code, zone_expense = call("POST", "/api/finance/expenses", token=zone_t, body={
+    "expense_date": "2026-01-15", "category": "Transport", "amount": 20, "location_id": 2,
+})
+check("zone leader can record a zone expense", code == 200, zone_expense)
+code, _ = call("DELETE", f"/api/finance/expenses/{zone_expense['id']}", token=zone_t)
+check("zone leader can remove their zone expense", code == 200)
+
+code, _ = call("DELETE", f"/api/pos/invoices/{fin_sale_id}", token=super_t)
+check("smoke sale removed", code == 200)
+code, _ = call("DELETE", f"/api/finance/purchases/{fin_purchase_id}", token=super_t)
+check("purchase bill can be reversed", code == 200)
+_, fin_stock_after = call("GET", "/api/stock?location_id=1", token=super_t)
+check("purchase reversal removes the stock", qty(fin_stock_after, fin_book_id, 1) == 0, fin_stock_after)
+code, _ = call("DELETE", f"/api/finance/expenses/{fin_expense_id}", token=super_t)
+check("expense can be removed", code == 200)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
