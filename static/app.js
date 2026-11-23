@@ -31,18 +31,29 @@ function newRequestId() {
 
 const submitLocks = new Set();
 
-function beginSubmit(key, buttonId) {
+function beginSubmit(key, buttonId, loadingLabel = 'Saving…') {
   if (submitLocks.has(key)) return false;
   submitLocks.add(key);
   const button = document.getElementById(buttonId);
-  if (button) button.disabled = true;
+  if (button) {
+    button.dataset.originalHtml = button.innerHTML;
+    button.classList.add('is-loading');
+    button.disabled = true;
+    button.innerHTML = `<span>${esc(loadingLabel)}</span>`;
+  }
   return true;
 }
 
 function endSubmit(key, buttonId) {
   submitLocks.delete(key);
   const button = document.getElementById(buttonId);
-  if (button) button.disabled = false;
+  if (!button) return;
+  button.classList.remove('is-loading');
+  if (button.dataset.originalHtml !== undefined) {
+    button.innerHTML = button.dataset.originalHtml;
+    delete button.dataset.originalHtml;
+  }
+  button.disabled = false;
 }
 
 const TABS = [
@@ -2087,7 +2098,7 @@ function captureBillLocation() {
 }
 
 async function checkout() {
-  if (!beginSubmit('checkout', 'checkoutButton')) return;
+  if (!beginSubmit('checkout', 'checkoutButton', 'Saving bill…')) return;
   try {
     await checkoutOnce();
   } finally {
@@ -2656,7 +2667,7 @@ function invoiceReceiveSyncLabel(due) {
 
 async function invoiceReceivePaymentSave(invoiceId) {
   const lockKey = 'recv-' + invoiceId;
-  if (!beginSubmit(lockKey, 'recvSubmit')) return;
+  if (!beginSubmit(lockKey, 'recvSubmit', 'Saving…')) return;
   try {
     await invoiceReceivePaymentSaveOnce(invoiceId);
   } finally {
@@ -2866,8 +2877,7 @@ async function invoiceBulkCollectSave() {
     if (errorEl) errorEl.textContent = `The selected bills total \u20b9${total.toFixed(2)}`;
     return;
   }
-  const submit = document.getElementById('bulkSubmit');
-  if (submit) submit.disabled = true;
+  if (!beginSubmit('bulk', 'bulkSubmit', 'Collecting…')) return;
   try {
     const res = await api('/api/pos/invoices/collect', { method: 'POST', body: {
       invoice_ids: selected.map(inv => inv.id),
@@ -2882,7 +2892,8 @@ async function invoiceBulkCollectSave() {
     invoiceList();
   } catch (e) {
     if (errorEl) errorEl.textContent = e.message;
-    if (submit) submit.disabled = false;
+  } finally {
+    endSubmit('bulk', 'bulkSubmit');
   }
 }
 
@@ -3574,7 +3585,7 @@ function purchaseFormTotalsUpdate() {
 }
 
 async function purchaseFormSubmit() {
-  if (!beginSubmit('purchase', 'purchaseSaveButton')) return;
+  if (!beginSubmit('purchase', 'purchaseSaveButton', 'Saving purchase…')) return;
   try {
     await purchaseFormSubmitOnce();
   } finally {
@@ -3780,7 +3791,7 @@ function expenseForm() {
 }
 
 async function expenseSave() {
-  if (!beginSubmit('expense', 'expenseSaveButton')) return;
+  if (!beginSubmit('expense', 'expenseSaveButton', 'Saving expense…')) return;
   try {
     await expenseSaveOnce();
   } finally {

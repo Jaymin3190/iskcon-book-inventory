@@ -596,3 +596,16 @@ td .action, td .danger { margin-bottom: 2px; }
   .pos-scan-toolbar > #manualBook { grid-column: 1 / -1; }
   .pos-scan-toolbar > button { width: 100%; margin-right: 0; }
 }
+
+button:disabled { opacity: .65; cursor: not-allowed; }
+button.is-loading { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+button.is-loading::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: buttonSpin .7s linear infinite;
+}
+@keyframes buttonSpin { to { transform: rotate(360deg); } }
