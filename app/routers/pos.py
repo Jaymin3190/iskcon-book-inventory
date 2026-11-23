@@ -85,6 +85,30 @@ def decorate_invoice(data):
     return data
 
 
+def invoice_creation_result(db, inv, duplicate=False):
+    """The response shape used both for a new bill and an idempotent retry."""
+    total = round(float(inv["total"] or 0), 2)
+    paid = paid_total(db, inv["id"])
+    return {
+        "invoice_id": inv["id"],
+        "invoice_number": inv["invoice_number"],
+        "total": total,
+        "subtotal": round(float(inv["subtotal"] or 0), 2),
+        "discount": round(float(inv["discount"] or 0), 2),
+        "amount_paid": paid,
+        "balance_due": max(0, round(total - paid, 2)),
+        "status": inv["status"],
+        "payment_mode": "razorpay" if inv["razorpay_qr_code_id"] else inv["payment_mode"],
+        "distributor_id": inv["distributor_id"],
+        "share_token": inv["share_token"],
+        "latitude": inv["latitude"],
+        "longitude": inv["longitude"],
+        "area_name": inv["area_name"],
+        "location_warning": None,
+        "duplicate": duplicate,
+    }
+
+
 
 def next_invoice_number(db, user) -> str:
     """Simple per-user series such as INV-superadmin-0001."""
@@ -114,6 +138,7 @@ class InvoiceIn(BaseModel):
     payment_ref: Optional[str] = None
     amount_received: Optional[float] = None
     discount: float = 0
+    client_request_id: Optional[str] = None
     items: list[InvoiceItemIn]
 
 
@@ -197,6 +222,17 @@ def export_invoices(db=Depends(get_db), user=Depends(require_roles("super_admin"
 
 @router.post("/invoices")
 def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_roles("super_admin", "zone_admin", "distributor", "temple"))):
+    request_id = (data.client_request_id or "").strip() or None
+    if request_id and len(request_id) > 120:
+        raise HTTPException(400, "Invalid client request id")
+    if request_id:
+        existing = db.execute(
+            "SELECT * FROM invoices WHERE client_request_id = ?", (request_id,)
+        ).fetchone()
+        if existing:
+            if existing["cashier_id"] != user["id"]:
+                raise HTTPException(409, "This request id is already in use")
+            return invoice_creation_result(db, existing, duplicate=True)
     if not data.items:
         raise HTTPException(400, "Cart is empty")
     if (data.latitude is None) != (data.longitude is None):
@@ -327,11 +363,11 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         cur = db.execute(
             """INSERT INTO invoices (invoice_number, share_token, location_id, customer_name, customer_phone,
                                      payment_mode, payment_ref, status, subtotal, discount, total, cashier_id,
-                                     distributor_id, latitude, longitude, area_name)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                     distributor_id, latitude, longitude, area_name, client_request_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (num, share_token, loc_id, customer_name, customer_phone,
              stored_payment_mode, data.payment_ref, status, subtotal, discount, total, user["id"],
-             distributor_id, data.latitude, data.longitude, area_name),
+             distributor_id, data.latitude, data.longitude, area_name, request_id),
         )
         iid = cur.lastrowid
         for book, q in resolved:
@@ -360,6 +396,22 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
                  "Initial payment at billing" if amount_paid < total else None),
             )
         db.commit()
+    except sqlite3.IntegrityError:
+        # A near-simultaneous double submit raced past the lookup above. The
+        # unique request id kept only the first bill, so return that one.
+        db.rollback()
+        if qr_code:
+            try:
+                close_qr_code(qr_code["id"])
+            except RazorpayError as error:
+                logger.error("Could not close orphan Razorpay QR %s: %s", qr_code["id"], error)
+        if request_id:
+            existing = db.execute(
+                "SELECT * FROM invoices WHERE client_request_id = ?", (request_id,)
+            ).fetchone()
+            if existing and existing["cashier_id"] == user["id"]:
+                return invoice_creation_result(db, existing, duplicate=True)
+        raise
     except RazorpayError as error:
         db.rollback()
         raise HTTPException(502, str(error)) from error
@@ -375,23 +427,9 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     payment_label = "razorpay" if data.payment_mode == "razorpay" else data.payment_mode
     log_audit(db, user["id"], "INVOICE_CREATE", "invoices", iid,
               f"{num} total {total} received {amount_paid} {payment_label} {status}", user["username"])
-    result = {
-        "invoice_id": iid,
-        "invoice_number": num,
-        "total": total,
-        "subtotal": subtotal,
-        "discount": discount,
-        "amount_paid": amount_paid,
-        "balance_due": max(0, round(total - amount_paid, 2)),
-        "status": status,
-        "payment_mode": payment_label,
-        "distributor_id": distributor_id,
-        "share_token": share_token,
-        "latitude": data.latitude,
-        "longitude": data.longitude,
-        "area_name": area_name,
-        "location_warning": location_warning,
-    }
+    saved = db.execute("SELECT * FROM invoices WHERE id = ?", (iid,)).fetchone()
+    result = invoice_creation_result(db, saved)
+    result["location_warning"] = location_warning
     if qr_code:
         result.update(
             razorpay_qr_code_id=qr_code["id"],

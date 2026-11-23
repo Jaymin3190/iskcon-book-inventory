@@ -24,6 +24,27 @@ async function api(path, opts = {}) {
   return data;
 }
 
+function newRequestId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+const submitLocks = new Set();
+
+function beginSubmit(key, buttonId) {
+  if (submitLocks.has(key)) return false;
+  submitLocks.add(key);
+  const button = document.getElementById(buttonId);
+  if (button) button.disabled = true;
+  return true;
+}
+
+function endSubmit(key, buttonId) {
+  submitLocks.delete(key);
+  const button = document.getElementById(buttonId);
+  if (button) button.disabled = false;
+}
+
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', roles: ['super_admin', 'zone_admin', 'temple'] },
   { id: 'books', label: 'Books', roles: ['super_admin', 'zone_admin', 'temple'] },
@@ -1460,7 +1481,7 @@ async function pos() {
       </div>
       <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
         <div><strong>Total:</strong> <span id="cartTotal">&#8377;0.00</span></div>
-        <button class="primary" onclick="checkout()">Save / Share</button>
+        <button id="checkoutButton" class="primary" onclick="checkout()">Save / Share</button>
       </div>
       <p class="hint">When you allow location, the coordinates are sent to OpenStreetMap to look up the neighborhood and city. The invoice will still be saved if location or area lookup is unavailable.</p>
     </div>`;
@@ -2066,6 +2087,15 @@ function captureBillLocation() {
 }
 
 async function checkout() {
+  if (!beginSubmit('checkout', 'checkoutButton')) return;
+  try {
+    await checkoutOnce();
+  } finally {
+    endSubmit('checkout', 'checkoutButton');
+  }
+}
+
+async function checkoutOnce() {
   if (!state.cart.length) { toast('Cart is empty', 'error'); return; }
   const custName = document.getElementById('custName').value.trim();
   const custPhone = document.getElementById('custPhone').value.trim();
@@ -2084,6 +2114,7 @@ async function checkout() {
   const purchasedItems = state.cart.map(i => ({ title: i.title, qty: i.qty }));
   const distributorSelect = document.getElementById('posDistributor');
   const distributorId = distributorSelect && distributorSelect.value ? Number(distributorSelect.value) : null;
+  if (!state.checkoutRequestId) state.checkoutRequestId = newRequestId();
   const { location, reason: locationWarning } = await captureBillLocation();
   let res;
   try {
@@ -2096,12 +2127,14 @@ async function checkout() {
       payment_mode: payMode, payment_ref: payRef,
       amount_received: amountReceived,
       discount: Number(document.getElementById('discount').value) || 0,
+      client_request_id: state.checkoutRequestId,
       items: state.cart.map(i => ({ barcode: i.barcode, qty: i.qty })),
     }});
   } catch (e) {
     toast(e.message, 'error');
     return;
   }
+  state.checkoutRequestId = newRequestId();
   state.cart = [];
   renderCart();
   state.lastInvoice = {
@@ -2123,13 +2156,16 @@ async function checkout() {
     showPendingPayment(res);
     toast(billLocationWarning
       ? `Invoice saved${location ? ' with coordinates' : ' without location'}: ${billLocationWarning}`
-      : 'Invoice saved; waiting for Razorpay payment confirmation', billLocationWarning ? 'info' : 'success');
+      : (res.duplicate
+        ? 'This bill was already saved; waiting for Razorpay payment confirmation'
+        : 'Invoice saved; waiting for Razorpay payment confirmation'), billLocationWarning ? 'info' : 'success');
     return;
   }
   showSavedInvoice(res, `Payment: ${res.payment_mode.toUpperCase()}${payRef ? ` (${payRef})` : ''}`);
   toast(billLocationWarning
     ? `Invoice saved${location ? ' with coordinates' : ' without location'}: ${billLocationWarning}`
-    : 'Invoice saved: ' + res.invoice_number, billLocationWarning ? 'info' : 'success');
+    : (res.duplicate ? 'This bill was already saved: ' + res.invoice_number : 'Invoice saved: ' + res.invoice_number),
+    billLocationWarning ? 'info' : 'success');
 }
 
 function showSavedInvoice(invoice, detail) {
@@ -2619,6 +2655,16 @@ function invoiceReceiveSyncLabel(due) {
 }
 
 async function invoiceReceivePaymentSave(invoiceId) {
+  const lockKey = 'recv-' + invoiceId;
+  if (!beginSubmit(lockKey, 'recvSubmit')) return;
+  try {
+    await invoiceReceivePaymentSaveOnce(invoiceId);
+  } finally {
+    endSubmit(lockKey, 'recvSubmit');
+  }
+}
+
+async function invoiceReceivePaymentSaveOnce(invoiceId) {
   const amount = Number(document.getElementById('recvAmount').value);
   const errorEl = document.getElementById('recvError');
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -3340,6 +3386,7 @@ let purchaseRows = [];
 let purchaseLocs = [];
 let purchaseBooks = [];
 let purchaseFormItems = [];
+let purchaseRequestId = null;
 let purchaseFilter = { frm: '', to: '', location_id: '' };
 
 function localDateInput(date = new Date()) {
@@ -3459,6 +3506,7 @@ async function purchaseDelete(purchaseId) {
 }
 
 async function purchaseForm() {
+  purchaseRequestId = newRequestId();
   purchaseFormItems = [{ book_id: '', qty: 1, unit_cost: 0 }];
   const warehouses = purchaseLocs.filter(l => l.type === 'warehouse');
   const defaultLoc = warehouses[0] || purchaseLocs[0];
@@ -3478,7 +3526,7 @@ async function purchaseForm() {
     <button class="action" onclick="purchaseFormAddRow()">+ Add book</button>
     <div id="purchaseTotals" class="hint" style="margin-top:10px"></div>
     <div class="form-row"><label>Note</label><input id="purNote"></div>
-    <button class="primary" onclick="purchaseFormSubmit()">Save purchase</button>`);
+    <button id="purchaseSaveButton" class="primary" onclick="purchaseFormSubmit()">Save purchase</button>`);
   purchaseFormRenderRows();
 }
 
@@ -3526,6 +3574,15 @@ function purchaseFormTotalsUpdate() {
 }
 
 async function purchaseFormSubmit() {
+  if (!beginSubmit('purchase', 'purchaseSaveButton')) return;
+  try {
+    await purchaseFormSubmitOnce();
+  } finally {
+    endSubmit('purchase', 'purchaseSaveButton');
+  }
+}
+
+async function purchaseFormSubmitOnce() {
   const items = purchaseFormItems
     .filter(i => i.book_id && Number(i.qty) > 0)
     .map(i => ({ book_id: Number(i.book_id), qty: Number(i.qty), unit_cost: Number(i.unit_cost) || 0 }));
@@ -3540,14 +3597,18 @@ async function purchaseFormSubmit() {
     amount_paid: Number(document.getElementById('purPaid').value) || 0,
     payment_mode: document.getElementById('purMode').value,
     note: document.getElementById('purNote').value.trim() || null,
+    client_request_id: purchaseRequestId || (purchaseRequestId = newRequestId()),
     items,
   };
   if (!body.supplier) { toast('Supplier is required', 'error'); return; }
   if (!body.purchase_date) { toast('Purchase date is required', 'error'); return; }
   try {
     const res = await api('/api/finance/purchases', { method: 'POST', body });
+    purchaseRequestId = null;
     closeModal();
-    toast(`Purchase saved: ${res.units} books for ${money(res.total)}`, 'success');
+    toast(res.duplicate
+      ? `This purchase was already saved as bill #${res.purchase_id}`
+      : `Purchase saved: ${res.units} books for ${money(res.total)}`, 'success');
     loadPurchases();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -3556,6 +3617,7 @@ async function purchaseFormSubmit() {
 let plReport = null;
 let plLocs = [];
 let expenseRows = [];
+let expenseRequestId = null;
 let plFilter = { frm: '', to: '', location_id: '' };
 
 const EXPENSE_CATEGORIES = ['Rent', 'Salary', 'Transport', 'Printing', 'Programme', 'Utilities', 'Office', 'Marketing', 'Other'];
@@ -3703,6 +3765,7 @@ function renderExpenses() {
 }
 
 function expenseForm() {
+  expenseRequestId = newRequestId();
   const canGlobal = hasAnyRole('super_admin', 'temple');
   openModal(`<h3>Add expense</h3>
     <div class="form-grid">
@@ -3713,10 +3776,19 @@ function expenseForm() {
       <div class="form-row"><label>Paid to / vendor</label><input id="expVendor"></div>
     </div>
     <div class="form-row"><label>Note</label><input id="expNote"></div>
-    <button class="primary" onclick="expenseSave()">Save expense</button>`);
+    <button id="expenseSaveButton" class="primary" onclick="expenseSave()">Save expense</button>`);
 }
 
 async function expenseSave() {
+  if (!beginSubmit('expense', 'expenseSaveButton')) return;
+  try {
+    await expenseSaveOnce();
+  } finally {
+    endSubmit('expense', 'expenseSaveButton');
+  }
+}
+
+async function expenseSaveOnce() {
   const location = document.getElementById('expLocation').value;
   const body = {
     expense_date: document.getElementById('expDate').value,
@@ -3725,13 +3797,15 @@ async function expenseSave() {
     location_id: location ? Number(location) : null,
     vendor: document.getElementById('expVendor').value.trim() || null,
     note: document.getElementById('expNote').value.trim() || null,
+    client_request_id: expenseRequestId || (expenseRequestId = newRequestId()),
   };
   if (!body.expense_date) { toast('Expense date is required', 'error'); return; }
   if (body.amount <= 0) { toast('Enter an amount greater than zero', 'error'); return; }
   try {
-    await api('/api/finance/expenses', { method: 'POST', body });
+    const res = await api('/api/finance/expenses', { method: 'POST', body });
+    expenseRequestId = null;
     closeModal();
-    toast('Expense saved', 'success');
+    toast(res.duplicate ? 'This expense was already saved' : 'Expense saved', 'success');
     await loadProfitLoss(true);
   } catch (e) { toast(e.message, 'error'); }
 }

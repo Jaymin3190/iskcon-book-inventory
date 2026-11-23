@@ -1346,5 +1346,54 @@ check("purchase reversal removes the stock", qty(fin_stock_after, fin_book_id, 1
 code, _ = call("DELETE", f"/api/finance/expenses/{fin_expense_id}", token=super_t)
 check("expense can be removed", code == 200)
 
+# --- duplicate bill protection ---
+code, dup_book = call("POST", "/api/books", token=super_t, body={
+    "title": "Duplicate Guard Book", "barcode": "SMOKE-DUP-001", "price": 100,
+    "cost_price": 60,
+})
+check("duplicate guard book created", code == 200 and dup_book.get("id"), dup_book)
+dup_book_id = dup_book["id"]
+dup_purchase_body = {
+    "supplier": "Duplicate Supplier", "bill_number": "DUP-001", "location_id": 1,
+    "purchase_date": "2026-01-16", "amount_paid": 0, "payment_mode": "credit",
+    "client_request_id": "smoke-purchase-request-1",
+    "items": [{"book_id": dup_book_id, "qty": 5, "unit_cost": 60}],
+}
+code, dup_purchase = call("POST", "/api/finance/purchases", token=super_t, body=dup_purchase_body)
+check("first purchase saved", code == 200 and not dup_purchase.get("duplicate"), dup_purchase)
+code, dup_purchase_retry = call("POST", "/api/finance/purchases", token=super_t, body=dup_purchase_body)
+check("retried purchase returns the same bill",
+      code == 200 and dup_purchase_retry["purchase_id"] == dup_purchase["purchase_id"]
+      and dup_purchase_retry.get("duplicate") is True, dup_purchase_retry)
+_, dup_stock = call("GET", "/api/stock?location_id=1", token=super_t)
+check("retried purchase adds stock once", qty(dup_stock, dup_book_id, 1) == 5, dup_stock)
+
+dup_bill_body = dict(dup_purchase_body)
+dup_bill_body["client_request_id"] = "smoke-purchase-request-2"
+code, dup_bill = call("POST", "/api/finance/purchases", token=super_t, body=dup_bill_body)
+check("same supplier bill number is rejected", code == 409
+      and "already recorded" in dup_bill.get("detail", ""), dup_bill)
+
+dup_sale_body = {
+    "location_id": 1, "customer_name": "Duplicate Customer",
+    "customer_phone": "9999999999", "payment_mode": "cash",
+    "client_request_id": "smoke-sale-request-1",
+    "items": [{"barcode": "SMOKE-DUP-001", "qty": 1}],
+}
+code, dup_sale = call("POST", "/api/pos/invoices", token=super_t, body=dup_sale_body)
+check("first sale saved", code == 200 and not dup_sale.get("duplicate"), dup_sale)
+code, dup_sale_retry = call("POST", "/api/pos/invoices", token=super_t, body=dup_sale_body)
+check("retried sale returns the same bill",
+      code == 200 and dup_sale_retry["invoice_id"] == dup_sale["invoice_id"]
+      and dup_sale_retry.get("duplicate") is True, dup_sale_retry)
+_, dup_stock_after_sale = call("GET", "/api/stock?location_id=1", token=super_t)
+check("retried sale removes stock once", qty(dup_stock_after_sale, dup_book_id, 1) == 4,
+      dup_stock_after_sale)
+
+code, _ = call("DELETE", f"/api/pos/invoices/{dup_sale['invoice_id']}", token=super_t)
+check("duplicate guard sale removed", code == 200)
+code, _ = call("DELETE", f"/api/finance/purchases/{dup_purchase['purchase_id']}", token=super_t)
+check("duplicate guard purchase removed", code == 200)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

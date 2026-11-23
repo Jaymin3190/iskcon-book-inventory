@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     area_name TEXT,
     cashier_id INTEGER REFERENCES users(id),
     distributor_id INTEGER REFERENCES users(id),
+    client_request_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -223,6 +224,7 @@ CREATE TABLE IF NOT EXISTS purchases (
     payment_mode TEXT NOT NULL DEFAULT 'credit',
     note TEXT,
     created_by INTEGER REFERENCES users(id),
+    client_request_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -245,6 +247,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     vendor TEXT,
     note TEXT,
     created_by INTEGER REFERENCES users(id),
+    client_request_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -390,6 +393,23 @@ def _migrate_cost_tracking(conn):
     )
 
 
+def _migrate_client_request_ids(conn):
+    """Remember which browser request created a bill, so a retry is a no-op.
+
+    A double click, an impatient retry or a dropped response used to create a
+    second bill. The browser now sends one id per attempt; the unique index
+    makes the database keep only the first one.
+    """
+    for table in ("invoices", "purchases", "expenses"):
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "client_request_id" not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN client_request_id TEXT")
+        conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_client_request "
+            f"ON {table}(client_request_id)"
+        )
+
+
 def _migrate_invoice_payments(conn):
     """Add the payment ledger and give every historically paid invoice its entry.
 
@@ -519,6 +539,7 @@ def init_db():
     _migrate_invoice_distributor(conn)
     _migrate_invoice_location(conn)
     _migrate_cost_tracking(conn)
+    _migrate_client_request_ids(conn)
     _migrate_invoice_payments(conn)
     _migrate_distributor_online_bills(conn)
     _migrate_cash_submission_items(conn)

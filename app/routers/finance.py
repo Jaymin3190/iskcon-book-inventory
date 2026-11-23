@@ -88,7 +88,25 @@ class PurchaseIn(BaseModel):
     amount_paid: float = 0
     payment_mode: str = "credit"
     note: Optional[str] = None
+    client_request_id: Optional[str] = None
     items: list[PurchaseItemIn]
+
+
+def _purchase_result(db, purchase, duplicate=False):
+    """The response used for a new purchase and for an idempotent retry."""
+    totals = db.execute(
+        """SELECT COUNT(*) AS items, COALESCE(SUM(qty),0) AS units
+             FROM purchase_items WHERE purchase_id = ?""",
+        (purchase["id"],),
+    ).fetchone()
+    return {
+        "purchase_id": purchase["id"],
+        "total": _money(purchase["total"]),
+        "subtotal": _money(purchase["subtotal"]),
+        "items": int(totals["items"] or 0),
+        "units": int(totals["units"] or 0),
+        "duplicate": duplicate,
+    }
 
 
 @router.get("/purchases")
@@ -158,6 +176,17 @@ def create_purchase(
     db=Depends(get_db),
     user=Depends(require_roles("super_admin", "temple")),
 ):
+    request_id = (data.client_request_id or "").strip() or None
+    if request_id and len(request_id) > 120:
+        raise HTTPException(400, "Invalid client request id")
+    if request_id:
+        existing = db.execute(
+            "SELECT * FROM purchases WHERE client_request_id = ?", (request_id,)
+        ).fetchone()
+        if existing:
+            if existing["created_by"] != user["id"]:
+                raise HTTPException(409, "This request id is already in use")
+            return _purchase_result(db, existing, duplicate=True)
     if not data.items:
         raise HTTPException(400, "A purchase bill needs at least one book")
     if data.location_id not in finance_location_ids(db, user):
@@ -166,6 +195,17 @@ def create_purchase(
     if not supplier:
         raise HTTPException(400, "Supplier is required")
     purchase_date = _as_date(data.purchase_date, "Purchase date")
+    bill_number = (data.bill_number or "").strip() or None
+    if bill_number:
+        duplicate_bill = db.execute(
+            "SELECT id FROM purchases WHERE supplier = ? AND bill_number = ?",
+            (supplier, bill_number),
+        ).fetchone()
+        if duplicate_bill:
+            raise HTTPException(
+                409,
+                f"Supplier bill {bill_number} is already recorded as purchase #{duplicate_bill['id']}",
+            )
     if data.payment_mode not in PURCHASE_PAYMENT_MODES:
         raise HTTPException(400, "Invalid payment mode")
     if data.freight < 0 or data.discount < 0:
@@ -209,10 +249,10 @@ def create_purchase(
         cur = db.execute(
             """INSERT INTO purchases (bill_number, supplier, location_id, purchase_date,
                                       subtotal, freight, discount, total, amount_paid,
-                                      payment_mode, note, created_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                      payment_mode, note, created_by, client_request_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                (data.bill_number or "").strip() or None,
+                bill_number,
                 supplier,
                 data.location_id,
                 purchase_date,
@@ -224,6 +264,7 @@ def create_purchase(
                 data.payment_mode,
                 (data.note or "").strip() or None,
                 user["id"],
+                request_id,
             ),
         )
         purchase_id = cur.lastrowid
@@ -238,27 +279,31 @@ def create_purchase(
             )
             move_stock(
                 db, book_id, data.location_id, qty, "PURCHASE_IN", "purchases",
-                purchase_id, user["id"], data.bill_number or supplier, commit=False,
+                purchase_id, user["id"], bill_number or supplier, commit=False,
             )
         for book_id in resolved:
             _recalculate_book_cost(db, book_id)
         db.commit()
+    except sqlite3.IntegrityError:
+        db.rollback()
+        if request_id:
+            existing = db.execute(
+                "SELECT * FROM purchases WHERE client_request_id = ?", (request_id,)
+            ).fetchone()
+            if existing and existing["created_by"] == user["id"]:
+                return _purchase_result(db, existing, duplicate=True)
+        raise
     except sqlite3.Error:
         db.rollback()
         raise
 
     log_audit(
         db, user["id"], "PURCHASE_CREATE", "purchases", purchase_id,
-        f"{supplier} bill {data.bill_number or '-'} total {total} at location {data.location_id}",
+        f"{supplier} bill {bill_number or '-'} total {total} at location {data.location_id}",
         user["username"],
     )
-    return {
-        "purchase_id": purchase_id,
-        "total": total,
-        "subtotal": subtotal,
-        "items": len(lines),
-        "units": sum(line[1] for line in lines),
-    }
+    saved = db.execute("SELECT * FROM purchases WHERE id = ?", (purchase_id,)).fetchone()
+    return _purchase_result(db, saved)
 
 
 @router.delete("/purchases/{purchase_id}")
@@ -307,6 +352,7 @@ class ExpenseIn(BaseModel):
     location_id: Optional[int] = None
     vendor: Optional[str] = None
     note: Optional[str] = None
+    client_request_id: Optional[str] = None
 
 
 def _expense_scope_sql(db, user):
@@ -350,6 +396,17 @@ def create_expense(
     db=Depends(get_db),
     user=Depends(require_roles("super_admin", "zone_admin", "temple")),
 ):
+    request_id = (data.client_request_id or "").strip() or None
+    if request_id and len(request_id) > 120:
+        raise HTTPException(400, "Invalid client request id")
+    if request_id:
+        existing = db.execute(
+            "SELECT * FROM expenses WHERE client_request_id = ?", (request_id,)
+        ).fetchone()
+        if existing:
+            if existing["created_by"] != user["id"]:
+                raise HTTPException(409, "This request id is already in use")
+            return {"id": existing["id"], "duplicate": True}
     expense_date = _as_date(data.expense_date, "Expense date")
     category = (data.category or "").strip()
     if not category:
@@ -362,20 +419,32 @@ def create_expense(
             raise HTTPException(403, "You cannot record an expense at this location")
     elif user["role"] == "zone_admin":
         raise HTTPException(400, "Choose a location for this expense")
-    cur = db.execute(
-        """INSERT INTO expenses (expense_date, category, amount, location_id, vendor, note, created_by)
-           VALUES (?,?,?,?,?,?,?)""",
-        (
-            expense_date,
-            category,
-            _money(data.amount),
-            location_id,
-            (data.vendor or "").strip() or None,
-            (data.note or "").strip() or None,
-            user["id"],
-        ),
-    )
-    db.commit()
+    try:
+        cur = db.execute(
+            """INSERT INTO expenses (expense_date, category, amount, location_id, vendor, note,
+                                     created_by, client_request_id)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                expense_date,
+                category,
+                _money(data.amount),
+                location_id,
+                (data.vendor or "").strip() or None,
+                (data.note or "").strip() or None,
+                user["id"],
+                request_id,
+            ),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        db.rollback()
+        if request_id:
+            existing = db.execute(
+                "SELECT id, created_by FROM expenses WHERE client_request_id = ?", (request_id,)
+            ).fetchone()
+            if existing and existing["created_by"] == user["id"]:
+                return {"id": existing["id"], "duplicate": True}
+        raise
     log_audit(
         db, user["id"], "EXPENSE_CREATE", "expenses", cur.lastrowid,
         f"{category} {_money(data.amount)} at location {location_id or 'global'}",
