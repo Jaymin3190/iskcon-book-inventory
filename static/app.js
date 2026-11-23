@@ -2521,6 +2521,9 @@ async function invoiceList() {
   const rows = await api('/api/pos/invoices');
   const canDeleteAny = hasAnyRole('super_admin', 'zone_admin');
   openModal(`<h3>Invoice history</h3>
+    ${hasAnyRole('super_admin', 'zone_admin') ? `<div class="toolbar" style="margin-top:0;margin-bottom:10px">
+      <button class="primary" onclick="invoiceBulkCollect()">Collect from distributor</button>
+    </div>` : ''}
     <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only. Distributors see bills credited to them.</p>
     <div id="invoiceHistoryTable" class="table-scroll invoice-history-table-scroll"><table>
       <tr><th>Invoice</th><th>Date</th><th>Billed by</th><th>Location</th><th>Bill area</th><th>Customer</th><th>Payment</th><th>Status</th><th>Total</th><th>Received</th><th>Due</th><th>Actions</th></tr>
@@ -2530,10 +2533,7 @@ async function invoiceList() {
         <td>${esc(i.customer_name || '')}</td><td>${esc(i.razorpay_qr_code_id ? 'RAZORPAY' : i.payment_mode.toUpperCase())}</td><td><span class="badge ${esc(i.status)}">${esc(invoiceStatusLabel(i))}</span></td><td>&#8377;${Number(i.total).toFixed(2)}</td><td>&#8377;${Number(i.amount_paid || 0).toFixed(2)}</td><td>${Number(i.balance_due || 0) > 0 ? `<strong>&#8377;${Number(i.balance_due).toFixed(2)}</strong>` : '&#8377;0.00'}</td>
         <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${canEditInvoice(i) ? `<button class="action" onclick="invoiceEdit(${i.id})">Edit</button>` : ''}${canReceiveInvoicePayment(i) ? `<button class="action" onclick="invoiceReceivePayment(${i.id})">Receive payment</button>` : ''}${i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${i.status !== 'pending' && (canDeleteAny || (state.user.role !== 'distributor' && i.cashier_id === state.user.id)) ? `<button class="danger" onclick="event.stopPropagation(); invoiceDelete(${i.id})">Delete</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="12" class="hint">No invoices yet.</td></tr>'}
-    </table></div>
-    ${hasAnyRole('super_admin', 'zone_admin') ? `<div class="toolbar" style="margin-top:14px">
-      <button class="primary" onclick="invoiceBulkCollect()">Collect from distributor</button>
-    </div>` : ''}`);
+    </table></div>`);
   setupInvoiceHistoryScrollbar();
 }
 
