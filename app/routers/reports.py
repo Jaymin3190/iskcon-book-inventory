@@ -31,12 +31,16 @@ def _with_outstanding(rows):
     return result
 
 
-def _pending_cash_to_temple(db, zone_id, distributor_id=None):
+def _pending_cash_to_temple(db, zone_id, distributor_id=None, role=None):
     """Cash the zone team collected from customers but has not handed to the temple.
 
     Mirrors the Payment In tally: cash received on bills raised by the zone team
     (the zone admin or a distributor of that zone), minus handovers already
     recorded. Customer dues are reported separately as ``outstanding``.
+
+    A zone leader can act as the distributor on a bill. Only bills explicitly
+    credited to that leader count there; their ordinary walk-in bills are zone
+    cash, not a leader payable.
     """
     if zone_id is None:
         return 0.0
@@ -46,10 +50,19 @@ def _pending_cash_to_temple(db, zone_id, distributor_id=None):
     filters = ["i.location_id IN ({})".format(",".join("?" * len(ids)))]
     params = list(ids)
     if distributor_id is not None:
-        filters.append(
-            "(i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))"
-        )
-        params.extend([distributor_id, distributor_id])
+        if role is None:
+            owner = db.execute(
+                "SELECT role FROM users WHERE id = ?", (distributor_id,)
+            ).fetchone()
+            role = owner["role"] if owner else None
+        if role == "distributor":
+            filters.append(
+                "(i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))"
+            )
+            params.extend([distributor_id, distributor_id])
+        else:
+            filters.append("i.distributor_id = ?")
+            params.append(distributor_id)
     row = db.execute(
         f"""SELECT COALESCE(SUM(CASE WHEN paid > remitted
                                    THEN ROUND(paid - remitted, 2) ELSE 0 END),0) AS pending
@@ -413,7 +426,7 @@ def distributor_sales_report(frm: str = None, to: str = None, db=Depends(get_db)
              JOIN users u ON u.id = COALESCE(i.distributor_id,
                     CASE WHEN (SELECT role FROM users WHERE id = i.cashier_id) = 'distributor'
                          THEN i.cashier_id END)
-                          AND u.role = 'distributor'
+                          AND u.role IN ('distributor', 'zone_admin')
              JOIN locations l ON l.id = i.location_id
              JOIN invoice_items ii ON ii.invoice_id = i.id
              JOIN books b ON b.id = ii.book_id
@@ -587,7 +600,14 @@ def zone_overview(db=Depends(get_db), user=Depends(require_roles("super_admin", 
                        FROM stock s JOIN books b ON b.id = s.book_id
                       WHERE s.location_id = l.id) AS stock_value,
                     (SELECT COUNT(*) FROM users u
-                      WHERE u.role = 'distributor' AND u.zone_id = l.id AND u.is_active = 1) AS distributor_count,
+                      WHERE u.zone_id = l.id AND u.is_active = 1
+                        AND (u.role = 'distributor' OR (
+                            u.role = 'zone_admin' AND EXISTS (
+                                SELECT 1 FROM invoices ix
+                                 WHERE ix.distributor_id = u.id
+                                   AND ix.status IN ('paid','partial','unpaid')
+                            )
+                        ))) AS distributor_count,
                     COALESCE(ia.invoice_count,0) AS invoice_count,
                     COALESCE(ia.revenue,0) AS revenue,
                     COALESCE(ia.collected,0) AS collected,
@@ -650,44 +670,52 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
     elif has_role(user, "zone_admin"):
         zone_id = user["zone_id"]
 
-    where = "u.role = 'distributor'"
+    # A zone leader may also distribute books. Show them once they have at least
+    # one bill credited to them, so ordinary zone leaders do not clutter the list.
+    where = f"""(u.role = 'distributor' OR (
+                    u.role = 'zone_admin' AND EXISTS (
+                        SELECT 1 FROM invoices ix
+                         WHERE ix.distributor_id = u.id
+                           AND ix.status IN {SETTLED_SQL}
+                    )
+                ))"""
     params = []
     if zone_id is not None:
         where += " AND u.zone_id = ?"
         params.append(zone_id)
 
-    sql = f"""SELECT u.id, u.name, u.username, u.is_active, u.zone_id, u.created_at,
+    sql = f"""SELECT u.id, u.name, u.username, u.role, u.is_active, u.zone_id, u.created_at,
                      l.name AS zone_name,
                      (SELECT COUNT(*) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.status IN {SETTLED_SQL}) AS invoice_count,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.status IN {SETTLED_SQL}) AS revenue,
                      (SELECT COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM invoice_payments p
                                             WHERE p.invoice_id = i.id)),0) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.status IN {SETTLED_SQL}) AS collected,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.payment_mode = 'cash' AND i.status IN {SETTLED_SQL}) AS cash_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.payment_mode = 'upi'
                          AND i.razorpay_qr_code_id IS NULL AND i.status IN {SETTLED_SQL}) AS upi_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.razorpay_qr_code_id IS NOT NULL
                          AND i.status IN {SETTLED_SQL}) AS razorpay_total,
                      (SELECT COALESCE(SUM(i.total),0) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.payment_mode = 'ledger' AND i.status IN {SETTLED_SQL}) AS ledger_total,
                      (SELECT COALESCE(SUM(ii.qty),0)
                         FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.status IN {SETTLED_SQL}) AS books_sold,
                      (SELECT MAX(i.created_at) FROM invoices i
-                       WHERE (i.distributor_id = u.id OR (i.distributor_id IS NULL AND i.cashier_id = u.id))
+                       WHERE COALESCE(i.distributor_id, CASE WHEN u.role = 'distributor' THEN i.cashier_id END) = u.id
                          AND i.status IN {SETTLED_SQL}) AS last_sale
               FROM users u
               LEFT JOIN locations l ON l.id = u.zone_id
@@ -699,7 +727,9 @@ def distributors_report(zone_id: int = None, db=Depends(get_db), user=Depends(re
         data["outstanding"] = max(
             0, round(float(data["revenue"] or 0) - float(data["collected"] or 0), 2)
         )
-        data["pending_to_temple"] = _pending_cash_to_temple(db, data["zone_id"], data["id"])
+        data["pending_to_temple"] = _pending_cash_to_temple(
+            db, data["zone_id"], data["id"], data["role"]
+        )
         rows.append(data)
     return rows
 
@@ -715,10 +745,22 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
     ).fetchone()
     if not row:
         raise HTTPException(404, "User not found")
-    if row["role"] != "distributor":
-        raise HTTPException(400, "Selected user is not a distributor")
+    if row["role"] not in ("distributor", "zone_admin"):
+        raise HTTPException(400, "Selected user is not a distributor or zone leader")
     if not has_role(user, "super_admin") and row["zone_id"] != user["zone_id"]:
         raise HTTPException(403, "Forbidden")
+
+    # Older distributor bills may have no distributor_id, so a distributor's own
+    # cashier id identifies them too. A zone leader only counts on bills that
+    # explicitly name them as the distributor; their walk-in bills stay zone cash.
+    if row["role"] == "distributor":
+        owner = "(distributor_id = ? OR (distributor_id IS NULL AND cashier_id = ?))"
+        owner_i2 = "(i2.distributor_id = ? OR (i2.distributor_id IS NULL AND i2.cashier_id = ?))"
+        owner_params = (user_id, user_id)
+    else:
+        owner = "distributor_id = ?"
+        owner_i2 = "i2.distributor_id = ?"
+        owner_params = (user_id,)
 
     summary = db.execute(
         f"""SELECT COUNT(*) AS invoice_count,
@@ -733,17 +775,17 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
                   COALESCE(SUM(CASE WHEN payment_mode = 'ledger' THEN total ELSE 0 END),0) AS ledger_total,
                   COALESCE((SELECT SUM(ii.qty) FROM invoice_items ii
                               JOIN invoices i2 ON i2.id = ii.invoice_id
-                             WHERE (i2.distributor_id = ? OR (i2.distributor_id IS NULL AND i2.cashier_id = ?))
+                             WHERE {owner_i2}
                                AND i2.status IN {SETTLED_SQL}),0) AS books_sold,
                   MAX(created_at) AS last_sale
            FROM invoices
-           WHERE (distributor_id = ? OR (distributor_id IS NULL AND cashier_id = ?))
+           WHERE {owner}
              AND status IN {SETTLED_SQL}""",
-        (user_id, user_id, user_id, user_id),
+        owner_params + owner_params,
     ).fetchone()
 
     invoices = db.execute(
-        """SELECT i.id, i.invoice_number, i.created_at, i.customer_name, i.customer_phone,
+        f"""SELECT i.id, i.invoice_number, i.created_at, i.customer_name, i.customer_phone,
                   CASE WHEN i.razorpay_qr_code_id IS NOT NULL THEN 'razorpay'
                        ELSE i.payment_mode END AS payment_mode,
                   i.payment_ref, i.status, i.subtotal, i.discount, i.total,
@@ -753,9 +795,9 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
                   (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS line_count,
                   (SELECT COALESCE(SUM(ii.qty),0) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS books_qty
            FROM invoices i JOIN locations l ON l.id = i.location_id
-           WHERE (i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))
+           WHERE {owner}
            ORDER BY i.id DESC""",
-        (user_id, user_id),
+        owner_params,
     ).fetchall()
 
     books = db.execute(
@@ -765,10 +807,10 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
            FROM invoice_items ii
            JOIN invoices i ON i.id = ii.invoice_id
            JOIN books b ON b.id = ii.book_id
-           WHERE (i.distributor_id = ? OR (i.distributor_id IS NULL AND i.cashier_id = ?))
+           WHERE {owner}
              AND i.status IN {SETTLED_SQL}
            GROUP BY b.id ORDER BY revenue DESC""",
-        (user_id, user_id),
+        owner_params,
     ).fetchall()
 
     summary_data = dict(summary)
@@ -776,7 +818,9 @@ def distributor_details(user_id: int, db=Depends(get_db), user=Depends(require_r
         0,
         round(float(summary_data["revenue"] or 0) - float(summary_data["collected"] or 0), 2),
     )
-    summary_data["pending_to_temple"] = _pending_cash_to_temple(db, row["zone_id"], user_id)
+    summary_data["pending_to_temple"] = _pending_cash_to_temple(
+        db, row["zone_id"], user_id, row["role"]
+    )
     invoice_rows = []
     for invoice in invoices:
         data = dict(invoice)

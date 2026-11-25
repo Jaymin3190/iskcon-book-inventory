@@ -272,17 +272,19 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     if data.distributor_id is not None:
         if user["role"] not in ("super_admin", "zone_admin"):
             raise HTTPException(403, "Only a super admin or zone admin can assign a sale to a distributor")
+        # A zone leader can also act as the distributor for a sale, because in
+        # some zones the leader distributes the books and bills the customers.
         distributor = db.execute(
             """SELECT id, zone_id FROM users
-               WHERE id = ? AND role = 'distributor' AND is_active = 1""",
+               WHERE id = ? AND role IN ('distributor', 'zone_admin') AND is_active = 1""",
             (data.distributor_id,),
         ).fetchone()
         if not distributor:
-            raise HTTPException(400, "Select an active distributor")
+            raise HTTPException(400, "Select an active distributor or zone leader")
         if user["role"] == "zone_admin" and distributor["zone_id"] != user["zone_id"]:
             raise HTTPException(403, "Zone admins can only bill for distributors in their own zone")
         if loc["type"] != "warehouse" and distributor["zone_id"] != loc_id:
-            raise HTTPException(400, "The distributor must belong to the billing zone")
+            raise HTTPException(400, "The distributor or zone leader must belong to the billing zone")
         distributor_id = distributor["id"]
     if user["role"] == "distributor":
         # A distributor always collects in full from the customer; the bill is
@@ -314,7 +316,7 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
     if data.payment_mode == "razorpay" and distributor_id is not None:
         raise HTTPException(400, "Distributor bills cannot use Razorpay")
     if data.payment_mode == "ledger" and distributor_id is None:
-        raise HTTPException(400, "Credit bills must be assigned to a distributor")
+        raise HTTPException(400, "Credit bills must be assigned to a distributor or zone leader")
 
     if distributor_id is not None:
         # Only cash the distributor collected is due to the zone. A UPI or card

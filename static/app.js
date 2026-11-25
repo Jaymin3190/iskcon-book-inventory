@@ -661,7 +661,7 @@ async function zoneDetails(zoneId) {
       <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : i.status === 'pending' ? `<button class="action" onclick="checkInvoicePayment(${i.id})">Check payment</button>` : ''}${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'zone', ${zoneId})">Delete</button>` : ''}</td>
     </tr>`).join('') || '<tr><td colspan="11" class="hint">No invoices in this zone yet.</td></tr>';
   openModal(`<h3>${esc(z.name || 'Zone')} &mdash; details</h3>
-    <p class="hint">${esc(z.code || '')} &middot; ${z.stock_units ?? 0} stock units &middot; ${z.distributor_count ?? distributors.length} active distributor(s)</p>
+    <p class="hint">${esc(z.code || '')} &middot; ${z.stock_units ?? 0} stock units &middot; ${distributors.length} distributor / zone leader(s)</p>
     <div class="mini-stats">
       ${miniStat('Zone revenue', '&#8377;' + Number(z.revenue || 0).toFixed(2))}
       ${miniStat('Collected', '&#8377;' + Number(z.collected || 0).toFixed(2))}
@@ -675,11 +675,11 @@ async function zoneDetails(zoneId) {
       ${miniStat('Stock value', '&#8377;' + Number(z.stock_value || 0).toFixed(0))}
     </div>
     <p class="hint">Outstanding is what customers still owe the zone. Pending to temple is cash the zone collected but has not handed over yet &mdash; that is the amount collected from here in Payment In.</p>
-    <h4>Distributors</h4>
+    <h4>Distributors / zone leaders</h4>
     <table>
       <tr><th>Distributor</th><th>Bills</th><th>Books sold</th><th>Cash</th><th>UPI</th><th>Razorpay</th><th>Credit</th><th>Revenue</th><th>Collected</th><th>Outstanding</th><th>Pending to temple</th><th>Last sale</th><th></th></tr>
       ${distributors.map(d => `<tr class="zone-row" onclick="distributorDetails(${d.id}, ${zoneId})">
-        <td><strong>${esc(d.name)}</strong><span class="cart-book-barcode">${esc(d.username)}</span></td>
+        <td><strong>${esc(d.name)}</strong>${d.role === 'zone_admin' ? '<span class="badge">zone leader</span>' : ''}<span class="cart-book-barcode">${esc(d.username)}</span></td>
         <td>${d.invoice_count}</td>
         <td>${d.books_sold}</td>
         <td>&#8377;${Number(d.cash_total || 0).toFixed(2)}</td>
@@ -726,7 +726,7 @@ async function distributorDetails(userId, zoneId) {
       <td>${['paid', 'partial', 'unpaid'].includes(i.status) ? `<button class="action" onclick="downloadInvoicePdf(${i.id})">PDF</button>` : ''}${hasRole('super_admin') ? `<button class="danger" onclick="invoiceDelete(${i.id}, 'dist', ${userId}, ${zoneId})">Delete</button>` : ''}</td>
     </tr>`).join('') || '<tr><td colspan="10" class="hint">No invoices yet.</td></tr>';
   openModal(`<h3>${esc(d.name)}</h3>
-    <p class="hint">@${esc(d.username)} &middot; ${esc(d.zone_name || '—')} &middot; ${d.is_active ? 'Active' : 'Inactive'} &middot; Joined ${esc(formatAuditTime(d.created_at))}</p>
+    <p class="hint">@${esc(d.username)} &middot; ${d.role === 'zone_admin' ? 'Zone leader' : 'Distributor'} &middot; ${esc(d.zone_name || '—')} &middot; ${d.is_active ? 'Active' : 'Inactive'} &middot; Joined ${esc(formatAuditTime(d.created_at))}</p>
     <div class="mini-stats">
       ${miniStat('Total sales', '&#8377;' + Number(s.revenue || 0).toFixed(2))}
       ${miniStat('Collected', '&#8377;' + Number(s.collected || 0).toFixed(2))}
@@ -1437,7 +1437,8 @@ async function pos() {
   ]);
   state.books = books;
   state.locations = locs;
-  state.posDistributors = users.filter(user => user.role === 'distributor' && user.is_active);
+  // A zone leader can also distribute books and hold the bill in their name.
+  state.posDistributors = users.filter(user => (user.role === 'distributor' || user.role === 'zone_admin') && user.is_active);
   state.cart = [];
   const isZoneMapped = state.user.role !== 'super_admin' && state.user.zone_id != null;
   const defaultWarehouse = locs.find(l => l.type === 'warehouse' && l.parent_id == null);
@@ -1559,10 +1560,13 @@ function renderPosDistributorOptions() {
     ? state.locations.find(l => l.id === Number(locationSelect.value))
     : state.locations.find(l => l.id === state.user.zone_id);
   const isSuper = state.user.role === 'super_admin';
-  // Super admins only attribute warehouse sales; zone admins attribute sales in
-  // their own zone to a distributor from that zone.
+  const isWarehouse = location?.type === 'warehouse';
+  // Super admins can attribute a godown sale to anyone, or a zone sale to a
+  // distributor or zone leader from that zone. Zone admins are already limited
+  // to their own zone by the users endpoint.
   const distributors = isSuper
-    ? (location?.type === 'warehouse' ? state.posDistributors : [])
+    ? (isWarehouse ? state.posDistributors
+      : state.posDistributors.filter(user => Number(user.zone_id) === Number(location?.id)))
     : state.posDistributors;
   if (!distributors.length) {
     row.hidden = true;
@@ -1571,13 +1575,16 @@ function renderPosDistributorOptions() {
     return;
   }
   const previous = document.getElementById('posDistributor')?.value || '';
+  const label = isSuper
+    ? (isWarehouse
+      ? 'Bill this godown sale to a distributor or zone leader (optional)'
+      : 'Bill this sale to a distributor or zone leader in this zone (optional)')
+    : 'Bill this sale to a distributor or zone leader in your zone (optional)';
   row.hidden = false;
-  row.innerHTML = `<label for="posDistributor">${isSuper
-    ? 'Bill this godown sale to a distributor (optional)'
-    : 'Bill this sale to a distributor in your zone (optional)'}</label>
+  row.innerHTML = `<label for="posDistributor">${label}</label>
     <select id="posDistributor" onchange="syncBillingPayer()">
       <option value="">Walk-in customer (paid in full)</option>
-      ${distributors.map(distributor => `<option value="${distributor.id}"${String(distributor.id) === previous ? ' selected' : ''}>${esc(distributor.name)}</option>`).join('')}
+      ${distributors.map(distributor => `<option value="${distributor.id}"${String(distributor.id) === previous ? ' selected' : ''}>${esc(distributor.name)}${distributor.role === 'zone_admin' ? ' (zone leader)' : ''}</option>`).join('')}
     </select>
     <span class="hint">Only a cash bill is due to the zone; a UPI or card payment settles it at billing. A distributor bill is not added to distributor stock.</span>`;
   syncBillingPayer();
@@ -2522,7 +2529,7 @@ async function invoiceList() {
   const canDeleteAny = hasAnyRole('super_admin', 'zone_admin');
   openModal(`<h3>Invoice history</h3>
     ${hasAnyRole('super_admin', 'zone_admin') ? `<div class="toolbar" style="margin-top:0;margin-bottom:10px">
-      <button class="primary" onclick="invoiceBulkCollect()">Collect from distributor</button>
+      <button class="primary" onclick="invoiceBulkCollect()">Collect from distributor / leader</button>
     </div>` : ''}
     <p class="hint">Super admins see every bill. Zone admins see bills for their own zone only. Distributors see bills credited to them.</p>
     <div id="invoiceHistoryTable" class="table-scroll invoice-history-table-scroll"><table>
@@ -2567,7 +2574,7 @@ async function invoiceDetail(invoiceId) {
       <tr><th>Bill area</th><td>${hasLocation
         ? `${esc(inv.area_name || 'Area name unavailable')} · <a href="${mapUrl}" target="_blank" rel="noopener noreferrer">View on map</a>`
         : 'Not captured'}</td></tr>
-      ${inv.distributor_name ? `<tr><th>Distributor</th><td>${esc(inv.distributor_name)} (due to zone)</td></tr>` : ''}
+      ${inv.distributor_name ? `<tr><th>Distributor / zone leader</th><td>${esc(inv.distributor_name)} (due to zone)</td></tr>` : ''}
       <tr><th>Payment</th><td>${esc(inv.payment_mode.toUpperCase())}${inv.payment_ref ? ' · ' + esc(inv.payment_ref) : ''}</td></tr>
       <tr><th>Status</th><td><span class="badge ${esc(inv.status)}">${esc(invoiceStatusLabel(inv))}</span></td></tr>
       ${inv.handed_over ? '<tr><th>Cash handover</th><td>Included in a payment-in receipt</td></tr>' : ''}
@@ -2601,8 +2608,8 @@ async function invoiceReceivePayment(invoiceId) {
   try { inv = await api('/api/pos/invoices/' + invoiceId); }
   catch (e) { toast(e.message, 'error'); return; }
   const due = Math.max(0, Number(inv.balance_due || 0));
-  openModal(`<h3>Collect from distributor</h3>
-    <p class="hint">${esc(inv.invoice_number)} &middot; ${esc(inv.distributor_name || inv.cashier_name || 'Distributor')}. Leave cash if the zone team collected it; it will then appear in Payment in for handover.</p>
+  openModal(`<h3>Collect from distributor / zone leader</h3>
+    <p class="hint">${esc(inv.invoice_number)} &middot; ${esc(inv.distributor_name || inv.cashier_name || 'Distributor / zone leader')}. Leave cash if the zone team collected it; it will then appear in Payment in for handover.</p>
     <div class="mini-stats">
       ${miniStat('Bill total', '&#8377;' + Number(inv.total).toFixed(2))}
       ${miniStat('Already collected', '&#8377;' + Number(inv.amount_paid || 0).toFixed(2))}
@@ -2726,14 +2733,14 @@ async function invoiceBulkCollect() {
   catch (e) { toast(e.message, 'error'); return; }
   const invoices = rows.filter(inv => canReceiveInvoicePayment(inv) && invoiceBulkKey(inv) != null);
   if (!invoices.length) {
-    toast('No distributor bills are waiting for collection', 'info');
+    toast('No distributor or zone leader bills are waiting for collection', 'info');
     return;
   }
   const distributors = new Map();
   for (const inv of invoices) {
     const id = invoiceBulkKey(inv);
     if (!distributors.has(id)) {
-      distributors.set(id, inv.distributor_name || inv.cashier_name || `Distributor ${id}`);
+      distributors.set(id, inv.distributor_name || inv.cashier_name || `Distributor / zone leader ${id}`);
     }
   }
   invoiceBulkState = {
@@ -2770,9 +2777,9 @@ function renderInvoiceBulkCollect() {
       <td>&#8377;${Number(inv.total).toFixed(2)}</td>
       <td><strong>&#8377;${Number(inv.balance_due || 0).toFixed(2)}</strong></td>
     </tr>`).join('') || '<tr><td colspan="6" class="hint">No pending bills for this distributor.</td></tr>';
-  openModal(`<h3>Collect from distributor</h3>
-    <p class="hint">Tick every bill the distributor handed over. If the amount is less than the total, it is applied to the oldest bills first.</p>
-    <div class="form-row"><label>Distributor</label>
+  openModal(`<h3>Collect from distributor / zone leader</h3>
+    <p class="hint">Tick every bill the distributor or zone leader handed over. If the amount is less than the total, it is applied to the oldest bills first.</p>
+    <div class="form-row"><label>Distributor / zone leader</label>
       <select id="bulkDistributor" onchange="invoiceBulkSelectDistributor(this.value)">${options}</select>
     </div>
     <div class="table-scroll"><table>
