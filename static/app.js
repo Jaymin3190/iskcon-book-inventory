@@ -2071,7 +2071,102 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-function captureBillLocation() {
+function billAreaCacheKey() {
+  try {
+    return JSON.parse(localStorage.getItem('billArea') || 'null');
+  } catch (e) {
+    return null;
+  }
+}
+
+function billAreaFromCoordinates(latitude, longitude) {
+  const cached = billAreaCacheKey();
+  if (!cached || !cached.area) return null;
+  if (Date.now() - Number(cached.at || 0) > 6 * 60 * 60 * 1000) return null;
+  const dLat = Math.abs(Number(cached.lat) - latitude);
+  const dLon = Math.abs(Number(cached.lon) - longitude);
+  // Roughly 300 m; staff bill from the same stall all day.
+  return dLat < 0.003 && dLon < 0.003 ? cached.area : null;
+}
+
+function rememberBillArea(latitude, longitude, area) {
+  try {
+    localStorage.setItem('billArea', JSON.stringify({
+      lat: latitude, lon: longitude, area, at: Date.now(),
+    }));
+  } catch (e) { /* storage may be full or disabled */ }
+}
+
+function areaFromNominatim(result) {
+  const address = (result && result.address) || {};
+  const pick = keys => keys.map(k => address[k]).find(Boolean);
+  const locality = pick(['neighbourhood', 'suburb', 'quarter', 'city_district', 'residential', 'village']);
+  const city = pick(['city', 'town', 'municipality', 'county']);
+  const district = address.state_district;
+  const state = address.state;
+  const parts = [];
+  [locality, city, district, state].forEach(part => {
+    if (part && !parts.some(existing => existing.toLowerCase() === String(part).toLowerCase())) {
+      parts.push(part);
+    }
+  });
+  return parts.join(', ') || result?.display_name || '';
+}
+
+function areaFromBigDataCloud(result) {
+  const parts = [];
+  [result?.locality, result?.city, result?.principalSubdivision].forEach(part => {
+    if (part && !parts.some(existing => existing.toLowerCase() === String(part).toLowerCase())) {
+      parts.push(part);
+    }
+  });
+  return parts.join(', ');
+}
+
+async function fetchJsonWithin(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// PythonAnywhere's free tier blocks outbound requests to OpenStreetMap, so the
+// server cannot name the place. The browser can, and its answer travels with
+// the bill. A fallback provider keeps one outage from blanking the area.
+async function lookupBillArea(latitude, longitude) {
+  const cached = billAreaFromCoordinates(latitude, longitude);
+  if (cached) return cached;
+  const queries = [
+    () => fetchJsonWithin(
+      'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat='
+        + encodeURIComponent(latitude) + '&lon=' + encodeURIComponent(longitude),
+      2500,
+    ).then(areaFromNominatim),
+    () => fetchJsonWithin(
+      'https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='
+        + encodeURIComponent(latitude) + '&longitude=' + encodeURIComponent(longitude)
+        + '&localityLanguage=en',
+      2500,
+    ).then(areaFromBigDataCloud),
+  ];
+  for (const query of queries) {
+    try {
+      const area = String(await query() || '').trim();
+      if (area) {
+        rememberBillArea(latitude, longitude, area);
+        return area;
+      }
+    } catch (error) { /* try the next provider */ }
+  }
+  return '';
+}
+
+function currentPosition() {
   if (!navigator.geolocation) {
     return Promise.resolve({ location: null, reason: 'Location is not supported by this browser.' });
   }
@@ -2096,12 +2191,23 @@ function captureBillLocation() {
             reason: reasons[error.code] || 'Location could not be captured.',
           });
         },
-        { enableHighAccuracy: false, maximumAge: 0, timeout: 10000 },
+        { enableHighAccuracy: false, maximumAge: 30000, timeout: 12000 },
       );
     } catch (error) {
       resolve({ location: null, reason: 'Location could not be captured.' });
     }
   });
+}
+
+async function captureBillLocation() {
+  const { location, reason } = await currentPosition();
+  if (!location) return { location: null, areaName: '', reason };
+  const areaName = await lookupBillArea(location.latitude, location.longitude);
+  return {
+    location,
+    areaName,
+    reason: areaName ? '' : 'The area name could not be looked up.',
+  };
 }
 
 async function checkout() {
@@ -2133,7 +2239,7 @@ async function checkoutOnce() {
   const distributorSelect = document.getElementById('posDistributor');
   const distributorId = distributorSelect && distributorSelect.value ? Number(distributorSelect.value) : null;
   if (!state.checkoutRequestId) state.checkoutRequestId = newRequestId();
-  const { location, reason: locationWarning } = await captureBillLocation();
+  const { location, areaName, reason: locationWarning } = await captureBillLocation();
   let res;
   try {
     res = await api('/api/pos/invoices', { method: 'POST', body: {
@@ -2141,6 +2247,7 @@ async function checkoutOnce() {
       distributor_id: distributorId,
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,
+      area_name: areaName || null,
       customer_name: custName, customer_phone: custPhone,
       payment_mode: payMode, payment_ref: payRef,
       amount_received: amountReceived,

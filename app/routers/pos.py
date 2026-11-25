@@ -30,7 +30,24 @@ router = APIRouter(prefix="/api/pos", tags=["pos"])
 PAYMENT_MODES = ("cash", "upi", "card", "razorpay", "ledger")
 INVOICE_PAYMENT_METHODS = ("cash", "upi", "card")
 INVOICE_SETTLED_STATUSES = ("paid", "partial", "unpaid")
+AREA_NAME_LIMIT = 160
 logger = logging.getLogger(__name__)
+
+
+def clean_area_name(value) -> Optional[str]:
+    """Normalise a bill area sent by the browser or looked up on the server.
+
+    The browser resolves the area because PythonAnywhere's free tier blocks
+    most outbound requests, so Nominatim is unreachable from the server there.
+    Whatever arrives is treated as untrusted text: whitespace is collapsed and
+    the value is capped at a sensible label length.
+    """
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    if not text:
+        return None
+    return text[:AREA_NAME_LIMIT]
 
 
 def invoice_status_for(total, amount_paid) -> str:
@@ -132,6 +149,9 @@ class InvoiceIn(BaseModel):
     distributor_id: Optional[int] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # The POS resolves this in the browser; the server only looks it up as a
+    # fallback for other API clients.
+    area_name: Optional[str] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     payment_mode: str = "cash"
@@ -348,9 +368,9 @@ def create_invoice(data: InvoiceIn, db=Depends(get_db), user=Depends(require_rol
         amount_paid = total
         status = invoice_status_for(total, amount_paid)
 
-    area_name = None
+    area_name = clean_area_name(data.area_name)
     location_warning = None
-    if data.latitude is not None:
+    if area_name is None and data.latitude is not None:
         try:
             area_name = reverse_geocode(data.latitude, data.longitude)
         except (OSError, TimeoutError, ValueError) as error:

@@ -77,6 +77,13 @@ Camera barcode scanning uses the mobile browser's camera and requires HTTPS
 and camera permission. The scanner processes frames in the browser; camera
 images are not uploaded to the app.
 
+Bill area names are also resolved in the browser. The browser keeps the
+coordinates it captured, asks OpenStreetMap (and a fallback geocoder if needed)
+for the locality, and sends the label with the bill. This runs in the browser
+because the free tier restricts outbound requests, which would leave the server
+unable to reach the geocoder. If the device refuses location, the bill is still
+saved, just without a bill area.
+
 ## Razorpay UPI QR payments
 
 Enable Razorpay's QR Codes feature for the account, then add the three
